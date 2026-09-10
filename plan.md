@@ -24,7 +24,7 @@ The chat and the class schedule both say a **room code** (like `N304`). The 3D v
 
 ## Schedule
 
-### 1. Beta (now)
+### 1. Beta (now) - 9/10/26
 
 Beta is how the pieces connect: Hunter’s map becomes the 3D campus and room pins; a Polycam walk becomes the hallway look; the website loads the scan only after you pick that floor.
 
