@@ -1,0 +1,11 @@
+{
+  "name": "hunter-spatial",
+  "private": true,
+  "workspaces": ["apps/web"],
+  "scripts": {
+    "dev": "npm run dev -w web",
+    "build": "npm run build -w web",
+    "test": "npm run test -w web",
+    "assets": "python scripts/extract_campus.py && python scripts/generate_glb.py"
+  }
+}

@@ -1,0 +1,159 @@
+{
+  "version": 1,
+  "rooms": [
+    {
+      "id": "N304",
+      "buildingId": "N",
+      "floor": 3,
+      "label": "Classroom (scanned-floor demo)",
+      "doorPosition": [
+        41.754,
+        10.548,
+        155.42
+      ]
+    },
+    {
+      "id": "N305",
+      "buildingId": "N",
+      "floor": 3,
+      "label": "Classroom",
+      "doorPosition": [
+        59.264,
+        10.548,
+        144.826
+      ]
+    },
+    {
+      "id": "N306",
+      "buildingId": "N",
+      "floor": 3,
+      "label": "Classroom",
+      "doorPosition": [
+        76.774,
+        10.548,
+        134.232
+      ]
+    },
+    {
+      "id": "N308",
+      "buildingId": "N",
+      "floor": 3,
+      "label": "Classroom",
+      "doorPosition": [
+        94.284,
+        10.548,
+        123.638
+      ]
+    },
+    {
+      "id": "N150",
+      "buildingId": "N",
+      "floor": 1,
+      "label": "Testing Center",
+      "doorPosition": [
+        41.754,
+        1.5,
+        155.42
+      ]
+    },
+    {
+      "id": "N217",
+      "buildingId": "N",
+      "floor": 2,
+      "label": "Bursar / Registrar",
+      "doorPosition": [
+        41.754,
+        6.024,
+        155.42
+      ]
+    },
+    {
+      "id": "N241",
+      "buildingId": "N",
+      "floor": 2,
+      "label": "Financial Aid",
+      "doorPosition": [
+        94.284,
+        6.024,
+        123.638
+      ]
+    },
+    {
+      "id": "E405",
+      "buildingId": "E",
+      "floor": 4,
+      "label": "Career Center",
+      "doorPosition": [
+        123.363,
+        14.001,
+        31.014
+      ]
+    },
+    {
+      "id": "E1119",
+      "buildingId": "E",
+      "floor": 11,
+      "label": "Advising",
+      "doorPosition": [
+        123.363,
+        43.17,
+        31.014
+      ]
+    },
+    {
+      "id": "E1214B",
+      "buildingId": "E",
+      "floor": 12,
+      "label": "Accessibility",
+      "doorPosition": [
+        123.363,
+        47.337,
+        31.014
+      ]
+    },
+    {
+      "id": "W417",
+      "buildingId": "W",
+      "floor": 4,
+      "label": "Student Center",
+      "doorPosition": [
+        56.418,
+        14.1,
+        24.991
+      ]
+    },
+    {
+      "id": "TH202",
+      "buildingId": "TH",
+      "floor": 2,
+      "label": "Office of Student Activities",
+      "doorPosition": [
+        98.238,
+        7.143,
+        96.316
+      ]
+    },
+    {
+      "id": "BTB420",
+      "buildingId": "BTB",
+      "floor": 4,
+      "label": "Theatre classroom",
+      "doorPosition": [
+        129.086,
+        13.5,
+        -85.286
+      ]
+    },
+    {
+      "id": "BTB620",
+      "buildingId": "BTB",
+      "floor": 6,
+      "label": "Theatre studio",
+      "doorPosition": [
+        129.086,
+        21.5,
+        -85.286
+      ]
+    }
+  ]
+}
