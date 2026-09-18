@@ -8,3 +8,4 @@ dist/
 .env.local
 *.har
 data/raw/
+apps/web/public/maplibre/

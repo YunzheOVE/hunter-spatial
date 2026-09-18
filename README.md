@@ -1,8 +1,8 @@
 # Hunter Spatial
 
-Indoor wayfinding for CUNY Hunter College (68th Street). Students pick a building and floor, search a room code, and (after Milestone 1) see the real floor plan in MapLibre.
+Indoor wayfinding for CUNY Hunter College (68th Street). Students pick a building and floor, search a room code, and see the extruded floor plan in MapLibre.
 
-See [plan.md](plan.md) for architecture and milestones.
+See [plan.md](plan.md) for architecture and milestones. Geometry comes from a one-time HAR extract ([data/SOURCE.md](data/SOURCE.md)).
 
 ## Stack
 
@@ -23,10 +23,12 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Search `N304` or pick a building and floor. The indoor map is empty until GeoJSON is extracted.
+Open [http://localhost:3000](http://localhost:3000). Search `N304` or pick a building and floor.
 
 ```bash
-npm test          # from apps/web
+python scripts/extract_har.py          # HAR -> data/raw/ (gitignored)
+python scripts/convert_to_geojson.py   # -> apps/web/public/data/hunter-floors.geojson
+npm test                               # from apps/web
 ```
 
 ## Folders

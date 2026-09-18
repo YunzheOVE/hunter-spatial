@@ -52,3 +52,8 @@ export function parseRoomId(raw: string): ParsedRoomId {
 
   return { id, buildingId, floor, room };
 }
+
+export function canonicalRoomId(parsed: ParsedRoomId): string {
+  if (!parsed.floor) return parsed.id.replace(/[\s-]/g, "");
+  return `${parsed.buildingId}${parsed.floor}${parsed.room}`;
+}

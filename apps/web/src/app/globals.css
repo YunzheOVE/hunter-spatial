@@ -10,12 +10,20 @@
 }
 
 html,
-body {
+body,
+#__next {
   height: 100%;
   margin: 0;
   background: var(--bg);
   color: var(--ink);
   font-family: "Georgia", "Times New Roman", serif;
+}
+
+.maplibregl-map,
+.maplibregl-canvas-container,
+.maplibregl-canvas {
+  width: 100%;
+  height: 100%;
 }
 
 * {

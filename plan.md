@@ -47,23 +47,48 @@ Code is open source. Indoor geometry is a one-time extract from Hunter’s publi
 - **Copy the walkable graph** (nodes, neighbor edges, extra cost, accessible flags, elevator / stair / skybridge connections). That *is* Hunter’s indoor routing. Write it to `routing-graph.json`.
 - **Do not copy Mappedin’s router.** No minified SDK, no `getDirections()` JavaScript, no Mappedin renderer in this repo. Academic use is not a license to vendor their engine, and that JS will not drop into MapLibre. Run our own A* with `ngraph.path` on the extracted graph.
 - Reconstruct corridor centerlines from scratch only if the HAR has no nodes / connections.
-- Converter must emit **WGS84** `[lon, lat]`. Use Mappedin’s lat/lng when present; otherwise apply the venue transform. Until that works, the building renders in the ocean or as a smear.
+- Converter must emit **WGS84** `[lon, lat]`. Prefer Mappedin’s already-georeferenced `venue.zip` `space/f_*.geojson`. Do not invent outdoor building masses from indoor Floor plates. Canvas bilinear georeference is a fallback only.
 
 ---
 
 ## Implementation schedule
 
-### Milestone 1: Beta — HAR ingest and 3D floor (now)
+### Milestone 1: Beta — 1:1 campus geometry from HAR (now)
 
-1. Inspect the HAR. Do not assume the payloads are already GeoJSON. The known blobs (`geometry.json` ~719 kB, `locations.json` ~32.6 kB) may be an older Mappedin venue format, not an MVF zip. Also look for extra node / connection requests.
-2. `scripts/extract_har.py` writes those JSON bodies to `data/raw/` (gitignored).
-3. `scripts/convert_to_geojson.py` normalizes to WGS84 FeatureCollections with properties `level`, `building`, `roomId`, `kind` (`room` / `hallway` / `wall`).
-4. Mount `maplibre-gl` in `apps/web/src/components/MapView.tsx` (client-only dynamic import; MapLibre needs `window`).
-5. `fill-extrusion` for walls / rooms (height ~3 m, or Mappedin floor elevation if present).
-6. Floor picker filters with `['==', ['get', 'level'], activeFloor]`.
-7. Click a room polygon to highlight it. Search still goes through `parseRoomId`.
+**Goal:** Match Hunter’s public map behavior in MapLibre — not a Mappedin SDK twin. Outdoor Hunter buildings are accurate 3D masses; neighbors stay flat gray; each selected floor is a detailed room layer at that floor’s real height.
 
-**Done when:** A student opens the web app, sees the real 3D floor plan of Hunter North floor 3 and Hunter West floor 3, and can click room polygons.
+**Approach:** Venue-zip first. Rebuild normalization around `data/raw/venue.zip` (`space/f_<mapId>.geojson`), which is already WGS84. Use `map.json` only for mapId → outdoor/indoor, level, and building group. Keep `polygon.json` only if walls/hallways are missing from the zip spaces.
+
+#### Data pipeline
+
+1. `scripts/extract_har.py` writes `polygon.json`, `location.json`, `map.json`, and `venue.zip` to `data/raw/` (gitignored).
+2. Rewrite `scripts/convert_to_geojson.py` to read `venue.zip`:
+   - **Outdoor map:** features named North / West / East / Thomas Hunter Hall / Baker Theatre → `kind: mass` with `height = storeys × 3.5`. Other outdoor polygons → `kind: context` (flat neighbors) or `bridge`.
+   - **Indoor maps:** named spaces → `kind: room` + `roomId`; unnamed walkable spaces → `hallway`. Attach `level`, `building`, `base = (level − 1) × 3.5`, and short extrusion `height`.
+   - Optionally merge wall outlines from `polygon.json` if the zip lacks edges.
+3. Emit one FeatureCollection to `apps/web/public/data/hunter-floors.geojson` with properties: `kind`, `building`, `level`, `roomId`, `base`, `height`, `scope` (`campus` | `indoor`).
+
+#### MapView (MapLibre only)
+
+4. Keep client-only `MapView` (dynamic import). Light basemap; hide basemap 3D buildings.
+5. **Outdoor (default):** flat gray `context`; purple `mass` fill-extrusions for the five Hunter buildings; fit campus camera (pitch ~50°, bearing ~−29°).
+6. **Floor selected:** shorten masses to a gray podium `height = max(0, (floor − 1) × 3.5)`; draw that floor’s rooms/hallways with `fill-extrusion-base = (floor − 1) × 3.5`; add a **dark line layer** on room polygons so walls are visible (no solid blank slab).
+7. Floor picker filters indoor layers with `['==', ['get', 'level'], activeFloor]`. Outdoor masses stay on screen.
+8. Click room / search via `parseRoomId` + `canonicalRoomId` highlights the room (gold) without hiding the rest of campus.
+
+#### Out of Milestone 1
+
+Routing graph, Directions UI, smart labels/icons, Pannellum, `.ics`, RAG.
+
+**Done when (Chrome):**
+
+1. Outdoor: five Hunter towers match the 68th Street block footprints; neighbors are flat gray; no invented overhanging masses.
+2. Floor 3: visible room outlines; North/West plans sit on a short podium; `N304` is clickable and searchable.
+3. Floors 7 and 15 sit clearly higher than floor 3 (same building stack, not glued to ground).
+4. Indoor layouts stay inside their building mass.
+5. Static `public/data/` only — no Mappedin at runtime.
+
+**Tests:** converter tests (named outdoor → mass; `N304` present; `base`/`height` math); existing `parseRoomId` Vitest; manual Chrome checklist above.
 
 ### Milestone 2: Multi-building routing and skybridges
 
@@ -114,7 +139,7 @@ hunter-spatial/
 │   └── hunter_campus.har               # Gitignored; local only
 ├── scripts/
 │   ├── extract_har.py                  # Pull JSON responses from the HAR
-│   └── convert_to_geojson.py           # Mappedin blobs → WGS84 GeoJSON + graph
+│   └── convert_to_geojson.py           # venue.zip spaces → WGS84 GeoJSON
 ├── services/
 │   └── rag-api/                        # FastAPI + Chroma (Milestone 4)
 ├── package.json
@@ -125,15 +150,15 @@ hunter-spatial/
 
 ## What is already in this repo
 
-The Next.js shell (building / floor / room search via `parseRoomId`). No indoor geometry yet — the map pane is empty until Milestone 1 GeoJSON exists.
+Next.js shell, `parseRoomId` + tests, HAR extract scripts, and an early MapLibre `MapView`. Outdoor masses were incorrectly invented from indoor Floor plates (misaligned / blank floors). Milestone 1 rewrite uses `venue.zip` WGS84 spaces instead.
 
-**Keep:** `apps/web` shell, `parseRoomId.ts` and its tests  
+**Keep:** `apps/web` shell, `parseRoomId.ts` and its tests, MapLibre (no Three.js)  
 **Do not commit:** `*.har`, `data/raw/`
 
 ---
 
 ## Next concrete step
 
-1. Save Hunter’s map network archive locally as `data/hunter_campus.har` (gitignored).
-2. Inspect payload schemas; write `extract_har.py` and `convert_to_geojson.py`.
-3. Render North 3 and West 3 in MapLibre and confirm room clicks + `parseRoomId` search still work.
+1. Rewrite `convert_to_geojson.py` to use `venue.zip` `space/f_*.geojson` for outdoor masses and indoor rooms.
+2. Update `MapView` for outdoor masses + elevated floor layers with visible room outlines.
+3. Verify Outdoor, floor 3 (`N304`), floor 7, and floor 15 in Chrome against Hunter’s map.

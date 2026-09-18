@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseRoomId } from "./parseRoomId";
+import { canonicalRoomId, parseRoomId } from "./parseRoomId";
 
 describe("parseRoomId", () => {
   it("parses four-digit North rooms as floor then room", () => {
@@ -55,5 +55,15 @@ describe("parseRoomId", () => {
 
   it("rejects unknown prefixes", () => {
     expect(() => parseRoomId("Z100")).toThrow(/unknown building prefix/i);
+  });
+
+  it("canonicalizes HN/HW codes to the map room id", () => {
+    expect(canonicalRoomId(parseRoomId("HN304"))).toBe("N304");
+    expect(canonicalRoomId(parseRoomId("N304"))).toBe("N304");
+    expect(canonicalRoomId(parseRoomId("HW417"))).toBe("W417");
+  });
+
+  it("keeps cellar codes when floor is 0", () => {
+    expect(canonicalRoomId(parseRoomId("C111"))).toBe("C111");
   });
 });

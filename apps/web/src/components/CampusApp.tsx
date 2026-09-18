@@ -1,7 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { parseRoomId } from "@/lib/parseRoomId";
+import dynamic from "next/dynamic";
+import { useState } from "react";
+import { canonicalRoomId, parseRoomId } from "@/lib/parseRoomId";
+
+const MapView = dynamic(() => import("./MapView").then((m) => m.MapView), { ssr: false });
 
 const BUILDINGS = [
   { id: "N", name: "North Building", floorCount: 16 },
@@ -11,23 +14,17 @@ const BUILDINGS = [
   { id: "BTB", name: "Baker Theatre Building", floorCount: 6 },
 ] as const;
 
+const CAMPUS_FLOORS = [0, ...Array.from({ length: 18 }, (_, i) => i + 1)];
+
 export function CampusApp() {
   const [buildingId, setBuildingId] = useState<string | null>(null);
   const [floor, setFloor] = useState<number | null>(null);
-  const [query, setQuery] = useState("N304");
-  const [selectedRoom, setSelectedRoom] = useState<string | null>("N304");
+  const [query, setQuery] = useState("");
+  const [selectedRoom, setSelectedRoom] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const building = BUILDINGS.find((item) => item.id === buildingId) ?? null;
-
-  const floors = useMemo(() => {
-    if (!building) return [];
-    return Array.from({ length: building.floorCount }, (_, i) => i + 1);
-  }, [building]);
 
   function selectBuilding(id: string) {
     setBuildingId(id);
-    setFloor(null);
     setError(null);
   }
 
@@ -38,23 +35,24 @@ export function CampusApp() {
   function goToQuery() {
     try {
       const parsed = parseRoomId(query);
+      const roomId = canonicalRoomId(parsed);
       setError(null);
       setBuildingId(parsed.buildingId);
       setFloor(parsed.floor || 1);
-      setSelectedRoom(parsed.id);
+      setSelectedRoom(roomId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not parse room");
     }
   }
 
   return (
-    <div className="flex h-screen min-h-0">
+    <div className="flex h-dvh min-h-0">
       <aside className="flex w-[320px] shrink-0 flex-col gap-4 overflow-y-auto border-r border-white/10 bg-[#1b1f2a] p-5">
         <div>
           <p className="text-xs tracking-[0.2em] text-[#e2b857] uppercase">CUNY Hunter College</p>
           <h1 className="mt-1 text-2xl">Hunter Spatial</h1>
           <p className="mt-2 text-sm text-[#b7b1a6]">
-            Pick a building, then a floor. The indoor map loads after Milestone 1 GeoJSON is in place.
+            Outdoor is the 3D campus. Each numbered floor sits at its real height, with rooms on that layer and the building mass below.
           </p>
         </div>
 
@@ -82,6 +80,15 @@ export function CampusApp() {
         <div>
           <p className="mb-2 text-sm text-[#b7b1a6]">Buildings</p>
           <div className="flex flex-col gap-1">
+            <button
+              type="button"
+              onClick={() => setBuildingId(null)}
+              className={`rounded px-3 py-2 text-left font-sans text-sm ${
+                buildingId == null ? "bg-[#5b2d82]" : "bg-white/5 hover:bg-white/10"
+              }`}
+            >
+              Whole campus
+            </button>
             {BUILDINGS.map((item) => (
               <button
                 key={item.id}
@@ -97,39 +104,51 @@ export function CampusApp() {
           </div>
         </div>
 
-        {building ? (
-          <div>
-            <p className="mb-2 text-sm text-[#b7b1a6]">{building.name} floors</p>
-            <div className="grid grid-cols-4 gap-1">
-              {floors.map((level) => (
-                <button
-                  key={level}
-                  type="button"
-                  onClick={() => selectFloor(level)}
-                  className={`rounded px-2 py-1 font-sans text-sm ${
-                    floor === level ? "bg-[#e2b857] text-[#12141a]" : "bg-white/5 hover:bg-white/10"
-                  }`}
-                >
-                  {level}
-                </button>
-              ))}
-            </div>
+        <div>
+          <p className="mb-2 text-sm text-[#b7b1a6]">Floor</p>
+          <div className="grid grid-cols-4 gap-1">
+            <button
+              type="button"
+              onClick={() => setFloor(null)}
+              className={`col-span-4 rounded px-2 py-1 font-sans text-sm ${
+                floor == null ? "bg-[#e2b857] text-[#12141a]" : "bg-white/5 hover:bg-white/10"
+              }`}
+            >
+              Outdoor
+            </button>
+            {CAMPUS_FLOORS.map((level) => (
+              <button
+                key={level}
+                type="button"
+                onClick={() => selectFloor(level)}
+                className={`rounded px-2 py-1 font-sans text-sm ${
+                  floor === level ? "bg-[#e2b857] text-[#12141a]" : "bg-white/5 hover:bg-white/10"
+                }`}
+              >
+                {level === 0 ? "C" : level}
+              </button>
+            ))}
           </div>
-        ) : null}
+        </div>
 
         {selectedRoom ? (
           <p className="text-sm">
             Selected: <span className="text-[#e2b857]">{selectedRoom}</span>
-            {buildingId && floor ? ` — ${buildingId}${floor}` : ""}
+            {buildingId && floor != null ? ` — ${buildingId}${floor === 0 ? "C" : floor}` : ""}
           </p>
         ) : null}
       </aside>
-      <main className="flex min-w-0 flex-1 items-center justify-center p-8 text-center text-[#b7b1a6]">
-        <p>
-          MapLibre floor plan goes here.
-          <br />
-          Extract Hunter geometry (Milestone 1) to render rooms.
-        </p>
+      <main className="relative h-full min-h-0 min-w-0 flex-1">
+        <MapView
+          buildingId={buildingId}
+          floor={floor}
+          selectedRoom={selectedRoom}
+          onSelectRoom={(roomId) => {
+            setSelectedRoom(roomId);
+            setQuery(roomId);
+            setError(null);
+          }}
+        />
       </main>
     </div>
   );
