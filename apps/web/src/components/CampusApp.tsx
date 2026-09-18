@@ -1,31 +1,24 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ComponentType } from "react";
-import { findRoom, getFloorView, listBuildings, roomsOnFloor, type Room } from "@/lib/campus";
+import { useMemo, useState } from "react";
 import { parseRoomId } from "@/lib/parseRoomId";
 
+const BUILDINGS = [
+  { id: "N", name: "North Building", floorCount: 16 },
+  { id: "E", name: "East Building", floorCount: 18 },
+  { id: "W", name: "West Building", floorCount: 17 },
+  { id: "TH", name: "Thomas Hunter Hall", floorCount: 7 },
+  { id: "BTB", name: "Baker Theatre Building", floorCount: 6 },
+] as const;
+
 export function CampusApp() {
-  const buildings = listBuildings();
   const [buildingId, setBuildingId] = useState<string | null>(null);
   const [floor, setFloor] = useState<number | null>(null);
   const [query, setQuery] = useState("N304");
-  const [selectedRoom, setSelectedRoom] = useState<Room | undefined>(() => findRoom("N304"));
+  const [selectedRoom, setSelectedRoom] = useState<string | null>("N304");
   const [error, setError] = useState<string | null>(null);
-  const [CanvasView, setCanvasView] = useState<ComponentType<{
-    buildingId: string | null;
-    floor: number | null;
-    selectedRoom?: Room;
-  }> | null>(null);
 
-  useEffect(() => {
-    void import("./CampusCanvas").then((mod) => {
-      setCanvasView(() => mod.CampusCanvas);
-    });
-  }, []);
-
-  const building = buildings.find((item) => item.id === buildingId) ?? null;
-  const floorView = buildingId && floor ? getFloorView(buildingId, floor) : null;
-  const floorRooms = buildingId && floor ? roomsOnFloor(buildingId, floor) : [];
+  const building = BUILDINGS.find((item) => item.id === buildingId) ?? null;
 
   const floors = useMemo(() => {
     if (!building) return [];
@@ -40,25 +33,15 @@ export function CampusApp() {
 
   function selectFloor(level: number) {
     setFloor(level);
-    const first = roomsOnFloor(buildingId ?? "", level)[0];
-    if (first) setSelectedRoom(first);
   }
 
   function goToQuery() {
     try {
       const parsed = parseRoomId(query);
-      const room = findRoom(parsed.id);
-      if (!room) {
-        setError(`No marker for ${parsed.id} in the beta catalog.`);
-        setBuildingId(parsed.buildingId);
-        setFloor(parsed.floor || 1);
-        setSelectedRoom(undefined);
-        return;
-      }
       setError(null);
-      setBuildingId(room.buildingId);
-      setFloor(room.floor);
-      setSelectedRoom(room);
+      setBuildingId(parsed.buildingId);
+      setFloor(parsed.floor || 1);
+      setSelectedRoom(parsed.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not parse room");
     }
@@ -71,7 +54,7 @@ export function CampusApp() {
           <p className="text-xs tracking-[0.2em] text-[#e2b857] uppercase">CUNY Hunter College</p>
           <h1 className="mt-1 text-2xl">Hunter Spatial</h1>
           <p className="mt-2 text-sm text-[#b7b1a6]">
-            Pick a building, then a floor. Scanned hallways load only after you open them.
+            Pick a building, then a floor. The indoor map loads after Milestone 1 GeoJSON is in place.
           </p>
         </div>
 
@@ -99,7 +82,7 @@ export function CampusApp() {
         <div>
           <p className="mb-2 text-sm text-[#b7b1a6]">Buildings</p>
           <div className="flex flex-col gap-1">
-            {buildings.map((item) => (
+            {BUILDINGS.map((item) => (
               <button
                 key={item.id}
                 type="button"
@@ -118,64 +101,35 @@ export function CampusApp() {
           <div>
             <p className="mb-2 text-sm text-[#b7b1a6]">{building.name} floors</p>
             <div className="grid grid-cols-4 gap-1">
-              {floors.map((level) => {
-                const scanned = building.floors.some((entry) => entry.level === level && entry.scan);
-                return (
-                  <button
-                    key={level}
-                    type="button"
-                    onClick={() => selectFloor(level)}
-                    className={`rounded px-2 py-1 font-sans text-sm ${
-                      floor === level ? "bg-[#e2b857] text-[#12141a]" : "bg-white/5 hover:bg-white/10"
-                    }`}
-                  >
-                    {level}
-                    {scanned ? "*" : ""}
-                  </button>
-                );
-              })}
+              {floors.map((level) => (
+                <button
+                  key={level}
+                  type="button"
+                  onClick={() => selectFloor(level)}
+                  className={`rounded px-2 py-1 font-sans text-sm ${
+                    floor === level ? "bg-[#e2b857] text-[#12141a]" : "bg-white/5 hover:bg-white/10"
+                  }`}
+                >
+                  {level}
+                </button>
+              ))}
             </div>
-            <p className="mt-2 text-xs text-[#b7b1a6]">* has a hallway scan</p>
           </div>
-        ) : null}
-
-        {floorView ? (
-          <p className="text-sm text-[#b7b1a6]">
-            {floorView.kind === "scan"
-              ? `Showing Polycam hallway for ${buildingId}${floor}.`
-              : `No scan yet — floor plan for ${buildingId}${floor}.`}
-          </p>
         ) : null}
 
         {selectedRoom ? (
           <p className="text-sm">
-            Marker: <span className="text-[#e2b857]">{selectedRoom.id}</span> — {selectedRoom.label}
+            Selected: <span className="text-[#e2b857]">{selectedRoom}</span>
+            {buildingId && floor ? ` — ${buildingId}${floor}` : ""}
           </p>
         ) : null}
-
-        {floorRooms.length > 1 ? (
-          <div className="flex flex-col gap-1">
-            {floorRooms.map((room) => (
-              <button
-                key={room.id}
-                type="button"
-                onClick={() => setSelectedRoom(room)}
-                className={`rounded px-3 py-1 text-left font-sans text-sm ${
-                  selectedRoom?.id === room.id ? "bg-white/15" : "bg-white/5"
-                }`}
-              >
-                {room.id}
-              </button>
-            ))}
-          </div>
-        ) : null}
       </aside>
-      <main className="min-w-0 flex-1">
-        {CanvasView ? (
-          <CanvasView buildingId={buildingId} floor={floor} selectedRoom={selectedRoom} />
-        ) : (
-          <div className="flex h-full items-center justify-center text-[#b7b1a6]">Loading campus…</div>
-        )}
+      <main className="flex min-w-0 flex-1 items-center justify-center p-8 text-center text-[#b7b1a6]">
+        <p>
+          MapLibre floor plan goes here.
+          <br />
+          Extract Hunter geometry (Milestone 1) to render rooms.
+        </p>
       </main>
     </div>
   );

@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Hunter Spatial",
-  description: "3D campus navigator for CUNY Hunter College",
+  description: "Indoor campus navigator for CUNY Hunter College",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
