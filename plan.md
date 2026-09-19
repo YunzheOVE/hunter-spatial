@@ -132,7 +132,7 @@ Routing graph, Directions UI, smart labels/icons, Pannellum, `.ics`, RAG.
    - Turn-by-turn instruction summary for every leg and clear interactive transition cards (skybridges, elevators, stairs).
    - Clicking any step or leg automatically navigates the map to that floor and building, auto-fitting the camera.
 
-### Milestone 3: 360° portals and class schedule
+### Milestone 3: 360° portals and class schedule (current)
 
 1. Embed Pannellum in a modal. Attach `pano_url` on a few landmark features. Clicking those opens the lookaround viewer. Capture our own equirectangular photos (Library, Cafeteria, Skybridge) — Pannellum does not supply imagery.
 2. Drag-and-drop `.ics` upload. Parse `LOCATION` with existing `parseRoomId` (`HN 304` → `N304`). Fly to the room and highlight the polygon. Pathfind to the entrance node.
@@ -195,6 +195,5 @@ Next.js shell, `parseRoomId` + tests, HAR extract scripts, and an early MapLibre
 
 ## Next concrete step
 
-1. Rewrite `convert_to_geojson.py` to use `venue.zip` `space/f_*.geojson` for outdoor masses and indoor rooms.
-2. Update `MapView` for outdoor masses + elevated floor layers with visible room outlines.
-3. Verify Outdoor, floor 3 (`N304`), floor 7, and floor 15 in Chrome against Hunter’s map.
+1. Experimenting different software to capture equirectangular images for 360° portals.
+2. Decide what places in the campus should have 360° views.
