@@ -4,27 +4,48 @@ Indoor wayfinding for CUNY Hunter College (68th Street). Students pick a buildin
 
 See [plan.md](plan.md) for architecture and milestones. Geometry comes from a one-time HAR extract ([data/SOURCE.md](data/SOURCE.md)).
 
-## System Architecture
+## System Architecture: The Two-Layer Paradigm
 
-Campus geometry is prepared offline and shipped as static files. The browser renders the map and calculates routes locally, so the deployed app does not need a map backend or database.
+Hunter Spatial is built around a **Two-Layer Architecture** that separates spatial vector geometry from photorealistic 360° visual inspection:
+
+1. **Layer 1 (Spatial Map Layer — MapLibre GL JS):** An interactive, hardware-accelerated 3D vector map rendering outdoor campus towers, stacked indoor floorplates, room boundary outlines, and glowing 3D walking route ribbons.
+2. **Layer 2 (Look Layer — Pannellum 360°):** On-demand photorealistic 360° interior panoramic lookarounds at landmark campus hubs (e.g., Level 3 Skybridges, Library, Cafeteria). Keeping photospheres inside an isolated modal prevents heavy image textures from causing mobile map lag.
+
+Campus geometry and the corridor routing graph are compiled offline via Python and shipped as static files. The browser renders the map and calculates routes locally in milliseconds, with **zero backend server or database dependencies**.
 
 ```mermaid
 flowchart LR
-    subgraph offline["Offline data preparation"]
-        archive["Local Hunter map archive"] --> pipeline["Python extraction and normalization"]
-        pipeline --> assets["Static campus files: GeoJSON and routing graph"]
+    subgraph offline["1. Offline Data Preparation"]
+        direction TB
+        archive["Local Hunter Map Archive<br/>(data/hunter.har)"] --> pipeline["Python Extraction Pipeline<br/>(scripts/extract_har.py, convert_to_geojson.py)"]
+        pipeline --> spatialAssets["Spatial Data Assets<br/>(hunter-floors.geojson & routing-graph.json)"]
+        photoAssets["360° Photospheres<br/>(panoramas/*.webp)"]
     end
 
-    subgraph browser["Browser application"]
-        user["Student"] --> ui["Next.js and React UI"]
-        ui --> map["MapLibre 3D map"]
-        ui --> router["In-browser A* routing"]
-        router -->|"Route geometry"| map
+    subgraph browser["2. Client Browser Application (Next.js 15 & React 19)"]
+        direction TB
+        user["Student"] --> ui["CampusApp UI<br/>(Search, Floor Switcher, Directions Drawer)"]
+        ui --> router["In-Browser A* Router<br/>(ngraph.path)"]
+
+        subgraph twoLayers["The Two-Layer Presentation System"]
+            direction TB
+            subgraph layer1["Layer 1: Spatial Map Layer (MapLibre GL JS)"]
+                map["3D Extruded Campus Map<br/>• Building Masses & Stacked Floors<br/>• 3D Room Outlines & Wall Borders<br/>• Glowing 3D Navigation Route Ribbons"]
+            end
+            subgraph layer2["Layer 2: Look Layer (Pannellum 360°)"]
+                look["Photorealistic Panoramas<br/>• Key Landmark Hubs: Skybridge, Library, Cafeteria<br/>• On-Demand Modal (Zero 3D Map GPU Lag)"]
+            end
+        end
+
+        router -->|"3D route ribbon"| map
+        ui -->|"Floor & room selection"| map
+        ui -.->|"Open 360° hub"| look
     end
 
-    assets -->|"Floors and markers"| map
-    assets -->|"Routing graph"| router
-    basemap["OpenFreeMap basemap"] -->|"Map tiles"| map
+    spatialAssets -->|"Floors & room geometries"| map
+    spatialAssets -->|"Corridor graph"| router
+    photoAssets -->|"Photosphere textures"| look
+    basemap["OpenFreeMap Basemap"] -->|"Vector tiles"| map
 ```
 
 ## Tech Stack
