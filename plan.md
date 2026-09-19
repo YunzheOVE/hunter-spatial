@@ -53,7 +53,7 @@ Code is open source. Indoor geometry is a one-time extract from Hunter’s publi
 
 ## Implementation schedule
 
-### Milestone 1: Beta — 1:1 campus geometry from HAR (now)
+### Milestone 1: Beta — 1:1 campus geometry from HAR
 
 **Goal:** Match Hunter’s public map behavior in MapLibre — not a Mappedin SDK twin. Outdoor Hunter buildings are accurate 3D masses; neighbors stay flat gray; each selected floor is a detailed room layer at that floor’s real height.
 
@@ -90,7 +90,7 @@ Routing graph, Directions UI, smart labels/icons, Pannellum, `.ics`, RAG.
 
 **Tests:** converter tests (named outdoor → mass; `N304` present; `base`/`height` math); existing `parseRoomId` Vitest; manual Chrome checklist above.
 
-### Milestone 2: Multi-building routing and skybridges
+### Milestone 2: Multi-building routing and skybridges (in progress)
 
 **Goal:** Campus-wide indoor pathfinding across rooms, floors, and buildings using A* on Hunter's real walkable graph.
 
