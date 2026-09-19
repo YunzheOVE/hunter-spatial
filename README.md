@@ -6,47 +6,13 @@ See [plan.md](plan.md) for architecture and milestones. Geometry comes from a on
 
 ## System Architecture: The Two-Layer Paradigm
 
-Hunter Spatial is built around a **Two-Layer Architecture** that separates spatial vector geometry from photorealistic 360° visual inspection:
+![Hunter Spatial System Architecture](docs/system-architecture.png)
 
-1. **Layer 1 (Spatial Map Layer — MapLibre GL JS):** An interactive, hardware-accelerated 3D vector map rendering outdoor campus towers, stacked indoor floorplates, room boundary outlines, and glowing 3D walking route ribbons.
-2. **Layer 2 (Look Layer — Pannellum 360°):** On-demand photorealistic 360° interior panoramic lookarounds at landmark campus hubs (e.g., Level 3 Skybridges, Library, Cafeteria). Keeping photospheres inside an isolated modal prevents heavy image textures from causing mobile map lag.
+Hunter Spatial decouples indoor navigation into two complementary display layers:
+* **Layer 1 (3D Campus Map):** Hardware-accelerated 3D vector floor plans and route ribbons rendered in **MapLibre GL JS**.
+* **Layer 2 (360° Viewer):** On-demand photorealistic 360° interior panoramas rendered in **Pannellum** at key campus landmarks.
 
-Campus geometry and the corridor routing graph are compiled offline via Python and shipped as static files. The browser renders the map and calculates routes locally in milliseconds, with **zero backend server or database dependencies**.
-
-```mermaid
-flowchart LR
-    subgraph offline["1. Offline Data Preparation"]
-        direction TB
-        archive["Local Hunter Map Archive<br/>(data/hunter.har)"] --> pipeline["Python Extraction Pipeline<br/>(scripts/extract_har.py, convert_to_geojson.py)"]
-        pipeline --> spatialAssets["Spatial Data Assets<br/>(hunter-floors.geojson & routing-graph.json)"]
-        photoAssets["360° Photospheres<br/>(panoramas/*.webp)"]
-    end
-
-    subgraph browser["2. Client Browser Application (Next.js 15 & React 19)"]
-        direction TB
-        user["Student"] --> ui["CampusApp UI<br/>(Search, Floor Switcher, Directions Drawer)"]
-        ui --> router["In-Browser A* Router<br/>(ngraph.path)"]
-
-        subgraph twoLayers["The Two-Layer Presentation System"]
-            direction TB
-            subgraph layer1["Layer 1: Spatial Map Layer (MapLibre GL JS)"]
-                map["3D Extruded Campus Map<br/>• Building Masses & Stacked Floors<br/>• 3D Room Outlines & Wall Borders<br/>• Glowing 3D Navigation Route Ribbons"]
-            end
-            subgraph layer2["Layer 2: Look Layer (Pannellum 360°)"]
-                look["Photorealistic Panoramas<br/>• Key Landmark Hubs: Skybridge, Library, Cafeteria<br/>• On-Demand Modal (Zero 3D Map GPU Lag)"]
-            end
-        end
-
-        router -->|"3D route ribbon"| map
-        ui -->|"Floor & room selection"| map
-        ui -.->|"Open 360° hub"| look
-    end
-
-    spatialAssets -->|"Floors & room geometries"| map
-    spatialAssets -->|"Corridor graph"| router
-    photoAssets -->|"Photosphere textures"| look
-    basemap["OpenFreeMap Basemap"] -->|"Vector tiles"| map
-```
+All geometry, navigation graphs, and panoramas are pre-compiled offline at **Build Time** and served as static assets—requiring **zero backend server or database**.
 
 ## Tech Stack
 
