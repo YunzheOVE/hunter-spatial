@@ -13,4 +13,4 @@ python scripts/extract_har.py
 python scripts/convert_to_geojson.py
 ```
 
-Code and MapLibre are open source. This indoor geometry is not. Do not call Mappedin from the running site.
+Code and MapLibre are open source. This indoor geometry is not, do not call Mappedin from the running site.
