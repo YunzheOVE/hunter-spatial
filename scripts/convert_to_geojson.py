@@ -66,7 +66,7 @@ def parse_level(name: str, short_name: str = "", elevation: int | float | None =
     if "concourse" in lower:
         return 0
     if "ground" in lower:
-        return 1
+        return 0 if elevation == -1 else 1
     if "basement" in lower or re.search(r"\bB\d+\b", text):
         nums = re.findall(r"\d+", text)
         return -int(nums[0]) if nums else 0
@@ -119,6 +119,106 @@ def _group_buildings(maps: list[dict], spaces_by_map: dict[str, list[dict]]) -> 
     return {group: counts.most_common(1)[0][0] for group, counts in votes.items() if counts}
 
 
+import math
+
+def load_styles(venue_path: Path) -> dict[str, str]:
+    poly_to_color: dict[str, str] = {}
+    if not venue_path.exists():
+        return poly_to_color
+    with zipfile.ZipFile(venue_path) as venue:
+        if "styles.json" in venue.namelist():
+            styles = json.loads(venue.read("styles.json").decode("utf-8"))
+            for sval in styles.values():
+                c = sval.get("color")
+                if not c:
+                    continue
+                for p in sval.get("polygons", []):
+                    poly_to_color[p] = c
+                    if p.startswith("s_"):
+                        poly_to_color[p[2:]] = c
+    return poly_to_color
+
+
+def build_room_outlines(room_features: list[dict], width_m: float = 0.02) -> list[dict]:
+    cos_lat = math.cos(math.radians(40.7685))
+    m_per_deg_lat = 111139.0
+    m_per_deg_lon = m_per_deg_lat * cos_lat
+    half_w = width_m / 2.0
+
+    by_bl: dict[tuple[str, int], list[dict]] = defaultdict(list)
+    for f in room_features:
+        props = f.get("properties") or {}
+        b = props.get("building")
+        l = props.get("level")
+        if b and l is not None:
+            by_bl[(b, l)].append(f)
+
+    outline_features: list[dict] = []
+    for (b, l), feats in by_bl.items():
+        base = feats[0]["properties"]["base"]
+        edges: set[tuple[tuple[float, float], tuple[float, float]]] = set()
+        for f in feats:
+            geom = f.get("geometry") or {}
+            coords = geom.get("coordinates", [])
+            gtype = geom.get("type")
+            rings = coords if gtype == "Polygon" else [r for poly in coords for r in poly]
+            for ring in rings:
+                for i in range(len(ring) - 1):
+                    p1 = (round(ring[i][0], 7), round(ring[i][1], 7))
+                    p2 = (round(ring[i + 1][0], 7), round(ring[i + 1][1], 7))
+                    if p1 != p2:
+                        edges.add(tuple(sorted([p1, p2])))
+
+        quads: list[list[list[float]]] = []
+        for p1, p2 in edges:
+            dx_m = (p2[0] - p1[0]) * m_per_deg_lon
+            dy_m = (p2[1] - p1[1]) * m_per_deg_lat
+            length = math.hypot(dx_m, dy_m)
+            if length < 0.05:
+                continue
+            ux = dx_m / length
+            uy = dy_m / length
+            ext_x = (ux * half_w) / m_per_deg_lon
+            ext_y = (uy * half_w) / m_per_deg_lat
+
+            nx = -dy_m / length
+            ny = dx_m / length
+            off_x = (nx * half_w) / m_per_deg_lon
+            off_y = (ny * half_w) / m_per_deg_lat
+
+            v1 = [round(p1[0] - ext_x + off_x, 7), round(p1[1] - ext_y + off_y, 7)]
+            v2 = [round(p2[0] + ext_x + off_x, 7), round(p2[1] + ext_y + off_y, 7)]
+            v3 = [round(p2[0] + ext_x - off_x, 7), round(p2[1] + ext_y - off_y, 7)]
+            v4 = [round(p1[0] - ext_x - off_x, 7), round(p1[1] - ext_y - off_y, 7)]
+            quads.append([[v1, v2, v3, v4, v1]])
+
+        if quads:
+            feat_id = f"room-outline-{b}-{l}"
+            outline_features.append(
+                {
+                    "type": "Feature",
+                    "id": feat_id,
+                    "properties": {
+                        "id": feat_id,
+                        "kind": "room-outline",
+                        "building": b,
+                        "level": l,
+                        "roomId": "",
+                        "name": "Room Outlines",
+                        "base": base,
+                        "height": round(base + 0.28, 2),
+                        "scope": "indoor",
+                        "color": "#848994",
+                    },
+                    "geometry": {
+                        "type": "MultiPolygon",
+                        "coordinates": quads,
+                    },
+                }
+            )
+    return outline_features
+
+
 def _properties(
     feature_id: str,
     *,
@@ -130,6 +230,7 @@ def _properties(
     base: float,
     height: float,
     scope: str,
+    color: str = "",
 ) -> dict:
     return {
         "id": feature_id,
@@ -141,6 +242,7 @@ def _properties(
         "base": base,
         "height": height,
         "scope": scope,
+        "color": color,
     }
 
 
@@ -148,8 +250,10 @@ def convert(
     maps: list[dict],
     spaces_by_map: dict[str, list[dict]],
     polygon_layers: dict[str, str] | None = None,
+    styles: dict[str, str] | None = None,
 ) -> dict:
     polygon_layers = polygon_layers or {}
+    styles = styles or {}
     group_buildings = _group_buildings(maps, spaces_by_map)
     features: list[dict] = []
 
@@ -176,16 +280,19 @@ def convert(
                     building, storeys = building_info
                     kind = "mass"
                     height = storeys * STOREY_M
+                    color = "#5b238a"
                 elif layer == "Dynamic - Building" or external_id in named_external_ids:
                     continue
                 elif layer == "Dynamic - Bridges":
                     building = ""
                     kind = "bridge"
                     height = BRIDGE_HEIGHT_M
+                    color = "#5b238a"
                 else:
                     building = ""
                     kind = "context"
                     height = 0.0
+                    color = ""
 
                 base = BRIDGE_BASE_M if kind == "bridge" else 0.0
 
@@ -204,6 +311,7 @@ def convert(
                             base=base,
                             height=height,
                             scope="campus",
+                            color=color,
                         ),
                     }
                 )
@@ -221,28 +329,36 @@ def convert(
             if feature.get("geometry", {}).get("type") not in {"Polygon", "MultiPolygon"}:
                 continue
             feature_id = _feature_id(feature)
-            if _raw_id(feature) in IGNORED_PILLAR_IDS:
+            raw_id = _raw_id(feature)
+            if raw_id in IGNORED_PILLAR_IDS:
                 continue
             props = feature.get("properties") or {}
             name = _feature_name(feature)
-            layer = polygon_layers.get(_raw_id(feature), "")
+            layer = polygon_layers.get(raw_id, "")
             is_walkable = bool(props.get("destinationNodes"))
+
+            venue_color = styles.get(f"s_{raw_id}", styles.get(raw_id, ""))
+
             if layer == "Floor":
                 kind = "floor"
                 thickness = FLOOR_HEIGHT_M
                 room_id = ""
+                color = venue_color or "#e6e6e6"
             elif layer == "Wall":
                 kind = "wall"
                 thickness = WALL_HEIGHT_M
                 room_id = ""
+                color = venue_color or "#9f9f9f"
             elif name:
                 kind = "room"
                 thickness = ROOM_HEIGHT_M
                 room_id = canonical_room_id(name, str(props.get("externalId") or ""))
+                color = venue_color or "#ffffff"
             elif layer == "Connection" or (not layer and is_walkable):
                 kind = "hallway"
                 thickness = HALLWAY_HEIGHT_M
                 room_id = ""
+                color = venue_color or "#cdd6e0"
             else:
                 continue
 
@@ -261,9 +377,15 @@ def convert(
                         base=base,
                         height=base + thickness,
                         scope="indoor",
+                        color=color,
                     ),
                 }
             )
+
+    room_features = [f for f in features if f["properties"].get("kind") == "room"]
+    outlines = build_room_outlines(room_features)
+    features.extend(outlines)
+
     return {"type": "FeatureCollection", "features": features}
 
 
@@ -295,7 +417,8 @@ def main() -> None:
     maps = json.loads((RAW_DIR / "map.json").read_text(encoding="utf-8"))
     spaces_by_map = load_spaces(RAW_DIR / "venue.zip", maps)
     polygon_layers = load_polygon_layers(RAW_DIR / "polygon.json")
-    fc = convert(maps, spaces_by_map, polygon_layers)
+    styles = load_styles(RAW_DIR / "venue.zip")
+    fc = convert(maps, spaces_by_map, polygon_layers, styles)
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     temp_path = OUT_PATH.with_suffix(".geojson.tmp")
     temp_path.write_text(json.dumps(fc, separators=(",", ":")), encoding="utf-8")

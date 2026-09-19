@@ -14,13 +14,13 @@ describe("campus level availability", () => {
   });
 
   it("only offers levels available in an isolated building", () => {
-    expect(campusLevelsForSelection("BTB")).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(campusLevelsForSelection("BTB")).toEqual([0, 1, 2, 3, 4, 5, 6]);
     expect(campusLevelsForSelection("N")).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
   });
 
   it("moves an isolated building selection to its nearest valid level", () => {
     expect(closestCampusLevel("BTB", 18)).toBe(6);
-    expect(closestCampusLevel("BTB", 0)).toBe(1);
+    expect(closestCampusLevel("BTB", 0)).toBe(0);
     expect(closestCampusLevel("N", 0)).toBe(0);
   });
 

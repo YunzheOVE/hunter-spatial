@@ -14,6 +14,8 @@
   "dependencies": {
     "maplibre-gl": "^6.10.0",
     "next": "^15.5.3",
+    "ngraph.graph": "^20.1.2",
+    "ngraph.path": "^1.6.1",
     "react": "19.2.3",
     "react-dom": "19.2.3"
   },

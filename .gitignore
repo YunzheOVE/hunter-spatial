@@ -11,3 +11,5 @@ __pycache__/
 *.har
 data/raw/
 apps/web/public/maplibre/
+scripts/scratch*.py
+project/

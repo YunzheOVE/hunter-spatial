@@ -28,6 +28,14 @@ export function parseRoomId(raw: string): ParsedRoomId {
   }
   const [token, buildingId] = prefix;
   const rest = id.slice(token.length);
+
+  if ((token === "BTB" && rest.startsWith("C")) || (token === "TH" && rest.startsWith("B"))) {
+    const concourseMatch = rest.slice(1).match(/^(\d+)([A-Z]?)$/);
+    if (concourseMatch) {
+      return { id, buildingId, floor: 0, room: rest };
+    }
+  }
+
   const match = rest.match(/^(\d+)([A-Z]?)$/);
   if (!match) {
     throw new Error(`Invalid room number: ${raw}`);

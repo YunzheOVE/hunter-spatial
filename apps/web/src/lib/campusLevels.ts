@@ -17,7 +17,9 @@ const CAMPUS_LEVELS = [
 ];
 
 function hasCampusLevel(building: CampusBuildingId, level: number): boolean {
-  return level === 0 ? building === "N" : level >= 1 && level <= CAMPUS_TOP_FLOORS[building];
+  return level === 0
+    ? building === "N" || building === "TH" || building === "BTB"
+    : level >= 1 && level <= CAMPUS_TOP_FLOORS[building];
 }
 
 export function campusBuildingsAtLevel(
@@ -42,6 +44,6 @@ export function campusPodiumLevels(
 }
 
 export function closestCampusLevel(building: CampusBuildingId, level: number): number {
-  const firstLevel = building === "N" ? 0 : 1;
+  const firstLevel = building === "N" || building === "TH" || building === "BTB" ? 0 : 1;
   return Math.min(Math.max(level, firstLevel), CAMPUS_TOP_FLOORS[building]);
 }

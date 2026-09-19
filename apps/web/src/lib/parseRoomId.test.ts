@@ -27,7 +27,7 @@ describe("parseRoomId", () => {
     expect(parseRoomId("BTB620").floor).toBe(6);
   });
 
-  it("maps cellar and east-basement prefixes to floor 0", () => {
+  it("maps cellar, east-basement, BTB concourse and TH basement to floor 0", () => {
     expect(parseRoomId("C111")).toEqual({
       id: "C111",
       buildingId: "N",
@@ -36,6 +36,18 @@ describe("parseRoomId", () => {
     });
     expect(parseRoomId("EB121").buildingId).toBe("E");
     expect(parseRoomId("EB121").floor).toBe(0);
+    expect(parseRoomId("BTBC01")).toEqual({
+      id: "BTBC01",
+      buildingId: "BTB",
+      floor: 0,
+      room: "C01",
+    });
+    expect(parseRoomId("THB004")).toEqual({
+      id: "THB004",
+      buildingId: "TH",
+      floor: 0,
+      room: "B004",
+    });
   });
 
   it("normalizes HN/HW/HE to N/W/E", () => {

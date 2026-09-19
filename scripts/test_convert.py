@@ -40,7 +40,7 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(parse_level("Level 3", "L3", 2), 3)
         self.assertEqual(parse_level("Concourse", "Concourse", -1), 0)
         self.assertEqual(parse_level("Basement 2", "B2", -2), -2)
-        self.assertEqual(parse_level("Ground Floor", "Ground Floor", -1), 1)
+        self.assertEqual(parse_level("Ground Floor", "Ground Floor", -1), 0)
 
     def test_room_ids_match_the_web_parser(self):
         self.assertEqual(canonical_room_id("N304"), "N304")
@@ -88,7 +88,7 @@ class ConvertTests(unittest.TestCase):
             {"n304": "Polygon", "hall": "Connection", "floor": "Floor", "wall": "Wall", "void": "Void"},
         )
 
-        self.assertEqual(len(fc["features"]), 4)
+        self.assertEqual(len(fc["features"]), 5)
         by_kind = {feature["properties"]["kind"]: feature for feature in fc["features"]}
         room_props = by_kind["room"]["properties"]
         self.assertEqual(room_props["roomId"], "N304")
@@ -99,6 +99,8 @@ class ConvertTests(unittest.TestCase):
         self.assertEqual(by_kind["hallway"]["properties"]["height"], 7.08)
         self.assertEqual(by_kind["floor"]["properties"]["height"], 7.04)
         self.assertEqual(by_kind["wall"]["properties"]["height"], 7.7)
+        self.assertEqual(by_kind["room-outline"]["properties"]["kind"], "room-outline")
+        self.assertEqual(by_kind["room-outline"]["properties"]["height"], 7.28)
 
     def test_layerless_walkable_space_falls_back_to_hallway(self):
         maps = [mapped_map()]

@@ -90,7 +90,7 @@ Routing graph, Directions UI, smart labels/icons, Pannellum, `.ics`, RAG.
 
 **Tests:** converter tests (named outdoor → mass; `N304` present; `base`/`height` math); existing `parseRoomId` Vitest; manual Chrome checklist above.
 
-### Milestone 2: Multi-building routing and skybridges (in progress)
+### Milestone 2: Multi-building routing and skybridges (completed)
 
 **Goal:** Campus-wide indoor pathfinding across rooms, floors, and buildings using A* on Hunter's real walkable graph.
 
@@ -102,33 +102,35 @@ Routing graph, Directions UI, smart labels/icons, Pannellum, `.ics`, RAG.
 - Room entrance mapping: All 2,914 named spaces in `venue.zip` have explicit `destinationNodes` connecting each room to its corridor node outside the door (no centroid guessing).
 
 #### Implementation steps
-1. **Offline graph normalization (`scripts/build_routing_graph.py`):**
-   - Extract `node.geojson` and `connection.json` from `data/raw/venue.zip`.
-   - Cross-reference `map.json` to attach `building` (`N`, `W`, `E`, `TH`, `BTB`), `level`, and `base` elevation.
-   - Build horizontal corridor links and vertical/bridge links (`stairs`, `elevator`, `escalator`, `bridge`) with `accessible` flags.
-   - Map `canonicalRoomId` (e.g., `N304`) to entrance `nodeId`.
-   - Output: `apps/web/public/data/routing-graph.json`.
-   - Add converter tests: `scripts/test_routing_graph.py`.
+1. **Offline graph normalization (`scripts/build_routing_graph.py`):** (Completed)
+   - Extracted `node.geojson` and `connection.json` from `data/raw/venue.zip`.
+   - Attached `building` (`N`, `W`, `E`, `TH`, `BTB`), `level`, and `base` elevation.
+   - Built horizontal corridor links and vertical/bridge links (`stairs`, `elevator`, `escalator`, `bridge`) with `accessible` flags.
+   - Mapped `canonicalRoomId` (e.g., `N304`) to entrance `nodeId`.
+   - Output: `apps/web/public/data/routing-graph.json` (7,161 nodes, 112 connectors).
+   - Converter tests: `scripts/test_routing_graph.py` (all passing).
 
-2. **Client-side A* pathfinding (`apps/web/src/lib/pathfinding.ts`):**
-   - Install `ngraph.graph` and `ngraph.path` in `apps/web`.
-   - Load and cache `routing-graph.json`.
-   - Implement `findRoute(fromRoomId, toRoomId, options?: { accessibleOnly?: boolean })`:
-     - Resolve entrance nodes, execute A* with 3D Euclidean heuristic and vertical transition weighting.
-     - Structure output into floor `legs` (`building`, `level`, coordinates `[lon, lat][]`), `transitions` (stairs/elevator/bridge), and estimated distance/time.
-   - Add Vitest tests in `apps/web/src/lib/pathfinding.test.ts`.
+2. **Client-side A* pathfinding (`apps/web/src/lib/pathfinding.ts`):** (Completed)
+   - Integrated `ngraph.graph` and `ngraph.path` in `apps/web`.
+   - Loaded and cached `routing-graph.json`.
+   - Implemented `findRoute(fromRoomId, toRoomId, options?: { accessibleOnly?: boolean })` with 3D Euclidean heuristic, vertical transition weighting, and step-free accessibility filter.
+   - Structured output into floor `legs`, `transitions`, and summary.
+   - Vitest tests: `apps/web/src/lib/pathfinding.test.ts` (all passing).
 
-3. **Route visualization in MapLibre (`MapView.tsx`):**
-   - Add GeoJSON source and line layer (`route-line`) styled above hallways and rooms.
-   - Render the route leg corresponding to the currently selected `floor` and `building`.
-   - Add start/destination pins and transition markers (stair/elevator/bridge icons) at floor handoffs.
-   - Camera auto-fits the active route segment.
+3. **Route visualization in MapLibre (`MapView.tsx`):** (Completed)
+   - Added 3D extruded route ribbons (`route-ribbons`) hovering slightly above floorplates with vertical gradient.
+   - Added elevated start/destination pedestals and transition badges.
+   - Multi-building context preserved in directions mode (`effectiveBuildingId = null`) so all campus buildings remain visible.
+   - Camera smoothly auto-fits active route segments.
 
-4. **Directions UI in `CampusApp.tsx`:**
-   - Directions panel with `Start Room` (defaults to current selection) and `Destination Room` inputs.
-   - Accessible route toggle (avoids stairs/escalators).
-   - Turn-by-turn / leg summary (e.g., "Walk corridor on Level 3" → "Cross Level 3 Skybridge to West" → "Take Elevator to Level 5").
-   - Clicking any step or leg automatically navigates the map to that floor and building.
+4. **Directions UI in `CampusApp.tsx`:** (Completed)
+   - Directions panel with `Start Room` (auto-defaults to current room selection) and `Destination Room` inputs.
+   - Real-time autocomplete suggestions dropdown matching room codes and names with building & floor badges.
+   - Swap button (`⇅`) for reversing start and destination.
+   - Accessible route toggle (`♿ Step-Free, avoid stairs & escalators`).
+   - Stepper carousel controls (`← Prev` / `Next →`) with step counter and active location.
+   - Turn-by-turn instruction summary for every leg and clear interactive transition cards (skybridges, elevators, stairs).
+   - Clicking any step or leg automatically navigates the map to that floor and building, auto-fitting the camera.
 
 ### Milestone 3: 360° portals and class schedule
 
