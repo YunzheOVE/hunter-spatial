@@ -53,42 +53,30 @@ Code is open source. Indoor geometry is a one-time extract from Hunter’s publi
 
 ## Implementation schedule
 
-### Milestone 1: Beta — 1:1 campus geometry from HAR
+### Milestone 1: 1:1 campus geometry and 3D indoor explorer (completed)
 
-**Goal:** Match Hunter’s public map behavior in MapLibre — not a Mappedin SDK twin. Outdoor Hunter buildings are accurate 3D masses; neighbors stay flat gray; each selected floor is a detailed room layer at that floor’s real height.
+**Goal:** Match Hunter’s public map behavior in MapLibre with accurate 3D outdoor building masses, stacked indoor floorplates, visible room boundaries, and room search/selection using normalized static GeoJSON.
 
-**Approach:** Venue-zip first. Rebuild normalization around `data/raw/venue.zip` (`space/f_<mapId>.geojson`), which is already WGS84. Use `map.json` only for mapId → outdoor/indoor, level, and building group. Keep `polygon.json` only if walls/hallways are missing from the zip spaces.
+#### Implementation steps
+1. **HAR extraction & offline geometry pipeline (`scripts/extract_har.py`, `scripts/convert_to_geojson.py`):** (Completed)
+   - Extracted Mappedin raw payloads (`venue.zip`, `map.json`, `location.json`, `polygon.json`) from local network HAR archive into `data/raw/` via `scripts/extract_har.py`.
+   - Extracted WGS84 outdoor and indoor geometries from `venue.zip` (`space/f_<mapId>.geojson`) and `map.json`.
+   - Mapped outdoor Hunter buildings to 3D masses (`kind: mass`, height = storeys × 3.5m) and neighboring blocks to flat context (`kind: context`).
+   - Normalized indoor floorplates, hallways, rooms, and walls with canonical room IDs (`canonicalRoomId`) and storey elevations (`base = (level − 1) × 3.5m`).
+   - Generated 3D boundary polygon outlines (`kind: room-outline`) to provide clear visual separation between rooms.
+   - Output: `apps/web/public/data/hunter-floors.geojson`.
+   - Converter unit tests: `scripts/test_convert_to_geojson.py` (all passing).
 
-#### Data pipeline
+2. **MapLibre 3D visualization (`MapView.tsx`):** (Completed)
+   - Rendered outdoor 3D building masses with campus camera framing (pitch ~52°, bearing ~−29°).
+   - Rendered elevated indoor layers (`floor-plate`, `hallways`, `rooms`, `walls`, `room-outlines`) filtered by active floor.
+   - Added stacked podium extrusions (`stacked-podiums`) beneath active floors to preserve building structural context.
+   - Handled Level 3 skybridge walkways connecting campus buildings.
 
-1. `scripts/extract_har.py` writes `polygon.json`, `location.json`, `map.json`, and `venue.zip` to `data/raw/` (gitignored).
-2. Rewrite `scripts/convert_to_geojson.py` to read `venue.zip`:
-   - **Outdoor map:** features named North / West / East / Thomas Hunter Hall / Baker Theatre → `kind: mass` with `height = storeys × 3.5`. Other outdoor polygons → `kind: context` (flat neighbors) or `bridge`.
-   - **Indoor maps:** named spaces → `kind: room` + `roomId`; unnamed walkable spaces → `hallway`. Attach `level`, `building`, `base = (level − 1) × 3.5`, and short extrusion `height`.
-   - Optionally merge wall outlines from `polygon.json` if the zip lacks edges.
-3. Emit one FeatureCollection to `apps/web/public/data/hunter-floors.geojson` with properties: `kind`, `building`, `level`, `roomId`, `base`, `height`, `scope` (`campus` | `indoor`).
-
-#### MapView (MapLibre only)
-
-4. Keep client-only `MapView` (dynamic import). Light basemap; hide basemap 3D buildings.
-5. **Outdoor (default):** flat gray `context`; purple `mass` fill-extrusions for the five Hunter buildings; fit campus camera (pitch ~50°, bearing ~−29°).
-6. **Floor selected:** shorten masses to a gray podium `height = max(0, (floor − 1) × 3.5)`; draw that floor’s rooms/hallways with `fill-extrusion-base = (floor − 1) × 3.5`; add a **dark line layer** on room polygons so walls are visible (no solid blank slab).
-7. Floor picker filters indoor layers with `['==', ['get', 'level'], activeFloor]`. Outdoor masses stay on screen.
-8. Click room / search via `parseRoomId` + `canonicalRoomId` highlights the room (gold) without hiding the rest of campus.
-
-#### Out of Milestone 1
-
-Routing graph, Directions UI, smart labels/icons, Pannellum, `.ics`, RAG.
-
-**Done when (Chrome):**
-
-1. Outdoor: five Hunter towers match the 68th Street block footprints; neighbors are flat gray; no invented overhanging masses.
-2. Floor 3: visible room outlines; North/West plans sit on a short podium; `N304` is clickable and searchable.
-3. Floors 7 and 15 sit clearly higher than floor 3 (same building stack, not glued to ground).
-4. Indoor layouts stay inside their building mass.
-5. Static `public/data/` only — no Mappedin at runtime.
-
-**Tests:** converter tests (named outdoor → mass; `N304` present; `base`/`height` math); existing `parseRoomId` Vitest; manual Chrome checklist above.
+3. **Room search and exploration UI (`CampusApp.tsx`):** (Completed)
+   - Added building switcher, floor selector, and quick "All buildings" / "Outdoor" toggle.
+   - Integrated room search via `parseRoomId` with autocomplete suggestions and camera fly-to.
+   - Supported interactive room clicking to highlight room polygons (`#10b981`) and display room details.
 
 ### Milestone 2: Multi-building routing and skybridges (completed)
 
