@@ -4,6 +4,29 @@ Indoor wayfinding for CUNY Hunter College (68th Street). Students pick a buildin
 
 See [plan.md](plan.md) for architecture and milestones. Geometry comes from a one-time HAR extract ([data/SOURCE.md](data/SOURCE.md)).
 
+## System Architecture
+
+Campus geometry is prepared offline and shipped as static files. The browser renders the map and calculates routes locally, so the deployed app does not need a map backend or database.
+
+```mermaid
+flowchart LR
+    subgraph offline["Offline data preparation"]
+        archive["Local Hunter map archive"] --> pipeline["Python extraction and normalization"]
+        pipeline --> assets["Static campus files: GeoJSON and routing graph"]
+    end
+
+    subgraph browser["Browser application"]
+        user["Student"] --> ui["Next.js and React UI"]
+        ui --> map["MapLibre 3D map"]
+        ui --> router["In-browser A* routing"]
+        router -->|"Route geometry"| map
+    end
+
+    assets -->|"Floors and markers"| map
+    assets -->|"Routing graph"| router
+    basemap["OpenFreeMap basemap"] -->|"Map tiles"| map
+```
+
 ## Tech Stack
 
 | Category | Core Technology | Role in Hunter Spatial |
@@ -39,4 +62,3 @@ npm test                               # from apps/web
 - `apps/web` — the Next.js web application
 - `scripts/` — data extraction, geometry conversion, and routing graph scripts
 - `data/` — local HAR only (gitignored); do not commit `.har` or `data/raw/`
-
