@@ -55,7 +55,7 @@ def extract(har_path: Path, dest: Path) -> dict[str, Path]:
         target = dest / name
         target.write_bytes(body_bytes(content))
         written[name] = target
-    missing = {"polygon.json", "location.json", "map.json"} - set(written)
+    missing = {"polygon.json", "location.json", "map.json", "venue.zip"} - set(written)
     if missing:
         raise SystemExit(f"HAR missing Mappedin payloads: {sorted(missing)}")
     return written

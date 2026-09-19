@@ -4,14 +4,20 @@ import { Map as MapLibreMap, NavigationControl, setWorkerUrl } from "maplibre-gl
 import type { ExpressionSpecification, FilterSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
+import {
+  campusBuildingsAtLevel,
+  campusPodiumLevels,
+  CAMPUS_TOP_FLOORS,
+  type CampusBuildingId,
+  STOREY_HEIGHT,
+} from "@/lib/campusLevels";
 
 setWorkerUrl("/maplibre/maplibre-gl-worker.mjs");
 
-const STOREY = 3.5;
-
 type Props = {
-  buildingId: string | null;
+  buildingId: CampusBuildingId | null;
   floor: number | null;
+  panelOpen: boolean;
   selectedRoom: string | null;
   onSelectRoom: (roomId: string) => void;
 };
@@ -23,6 +29,8 @@ type FloorProps = {
   scope: string;
   building: string;
   level: number | null;
+  base: number;
+  height: number;
 };
 type FloorFeature = {
   type: "Feature";
@@ -50,14 +58,60 @@ function bboxOfMany(features: FloorFeature[]): [number, number, number, number] 
   return [minX, minY, maxX, maxY];
 }
 
-function indoorFilter(kind: string, floor: number | null): FilterSpecification {
-  const clauses: unknown[] = ["all", ["==", ["get", "kind"], kind], ["==", ["get", "scope"], "indoor"]];
-  if (floor !== null) clauses.push(["==", ["get", "level"], floor]);
-  return clauses as FilterSpecification;
+function isCampusBuildingId(value: string): value is CampusBuildingId {
+  return value in CAMPUS_TOP_FLOORS;
 }
 
-function floorBase(floor: number): number {
-  return (floor - 1) * STOREY;
+function indoorFilter(
+  kind: string,
+  floor: number | null,
+  buildingId: CampusBuildingId | null,
+): FilterSpecification {
+  if (floor === null) return ["==", ["get", "kind"], "__hidden__"] as FilterSpecification;
+  const buildingLevels = campusBuildingsAtLevel(buildingId, floor).map((building) => [
+    "all",
+    ["==", ["get", "building"], building],
+    ["==", ["get", "level"], floor],
+  ]);
+  if (!buildingLevels.length) return ["==", ["get", "kind"], "__hidden__"] as FilterSpecification;
+  return [
+    "all",
+    ["==", ["get", "kind"], kind],
+    ["==", ["get", "scope"], "indoor"],
+    ["any", ...buildingLevels],
+  ] as unknown as FilterSpecification;
+}
+
+function stackedPodiumFilter(
+  floor: number | null,
+  buildingId: CampusBuildingId | null,
+): FilterSpecification {
+  if (floor === null) return ["==", ["get", "kind"], "__hidden__"] as FilterSpecification;
+  const buildingLevels = campusPodiumLevels(buildingId, floor).map(([building, topLevel]) => [
+    "all",
+    ["==", ["get", "building"], building],
+    ["<=", ["get", "level"], topLevel],
+  ]);
+  if (!buildingLevels.length) return ["==", ["get", "kind"], "__hidden__"] as FilterSpecification;
+  return [
+    "all",
+    ["==", ["get", "kind"], "floor"],
+    ["==", ["get", "scope"], "indoor"],
+    [">=", ["get", "level"], 1],
+    ["any", ...buildingLevels],
+  ] as unknown as FilterSpecification;
+}
+
+function isVisibleFloor(
+  feature: FloorFeature,
+  floor: number,
+  buildingId: CampusBuildingId | null,
+): boolean {
+  const { building, kind, level } = feature.properties;
+  return kind === "floor"
+    && isCampusBuildingId(building)
+    && level === floor
+    && campusBuildingsAtLevel(buildingId, floor).includes(building);
 }
 
 function hasWebGL2(): boolean {
@@ -65,30 +119,44 @@ function hasWebGL2(): boolean {
   return Boolean(canvas.getContext("webgl2"));
 }
 
-function fitFeatures(map: MapLibreMap, data: FloorFeature[], floor: number | null) {
+function fitFeatures(
+  map: MapLibreMap,
+  data: FloorFeature[],
+  floor: number | null,
+  buildingId: CampusBuildingId | null,
+  panelOpen: boolean,
+) {
+  const indoor = floor != null;
   const features =
-    floor == null
+    !indoor
       ? data.filter((item) => item.properties.kind === "mass")
-      : data.filter((item) => item.properties.scope === "indoor" && item.properties.level === floor);
+      : buildingId == null
+        ? data.filter((item) => item.properties.kind === "floor")
+        : data.filter((item) => isVisibleFloor(item, floor, buildingId));
   const box = bboxOfMany(features.length ? features : data);
   if (!box) return;
+  const container = map.getContainer();
+  const desktop = container.clientWidth >= 768;
+  const padding = panelOpen
+    ? desktop
+      ? { top: 90, right: 80, bottom: 90, left: 410 }
+      : { top: Math.min(500, container.clientHeight * 0.58 + 24), right: 42, bottom: 60, left: 42 }
+    : { top: 90, right: 80, bottom: 90, left: 80 };
   map.fitBounds(box, {
-    padding: 80,
-    pitch: 56,
-    bearing: -29,
+    padding,
+    pitch: indoor ? 52 : 48,
+    bearing: -20,
     duration: 700,
-    maxZoom: floor != null && floor >= 10 ? 16.4 : 17,
+    maxZoom: indoor ? 18.2 : 16.7,
   });
 }
 
-function roomColor(selectedRoom: string | null, buildingId: string | null): ExpressionSpecification {
+function roomColor(selectedRoom: string | null): ExpressionSpecification {
   return [
     "case",
     ["==", ["get", "roomId"], selectedRoom ?? ""],
-    "#e2b857",
-    ["all", ["!=", buildingId ?? "", ""], ["!=", ["get", "building"], buildingId ?? ""]],
-    "#a78bfa",
-    "#6d28d9",
+    "#35b779",
+    "#e1e6ec",
   ];
 }
 
@@ -100,45 +168,47 @@ function hideBasemapExtrusions(map: MapLibreMap) {
   }
 }
 
-function setMode(map: MapLibreMap, floor: number | null) {
+function setMode(
+  map: MapLibreMap,
+  floor: number | null,
+  buildingId: CampusBuildingId | null,
+) {
   const indoor = floor != null;
-  for (const id of ["hallways", "rooms"]) {
+  for (const id of ["stacked-podiums", "floor-plate", "hallways", "rooms", "walls"]) {
     map.setLayoutProperty(id, "visibility", indoor ? "visible" : "none");
   }
-  map.setLayoutProperty("hunter-mass", "visibility", "visible");
+  map.setLayoutProperty("campus-flat", "visibility", indoor ? "none" : "visible");
+  map.setLayoutProperty("hunter-bridges", "visibility", indoor ? "none" : "visible");
+  map.setLayoutProperty("building-labels", "visibility", indoor ? "none" : "visible");
+  map.setLayoutProperty("hunter-mass", "visibility", indoor ? "none" : "visible");
 
   if (!indoor) {
+    map.setFilter("hunter-mass", ["==", ["get", "kind"], "mass"]);
     map.setPaintProperty("hunter-mass", "fill-extrusion-base", 0);
     map.setPaintProperty("hunter-mass", "fill-extrusion-height", ["get", "height"]);
-    map.setPaintProperty("hunter-mass", "fill-extrusion-color", "#6d28d9");
+    map.setPaintProperty("hunter-mass", "fill-extrusion-color", "#5b238a");
     return;
   }
 
-  const base = floorBase(floor);
-  const podium = Math.max(0, base);
-  map.setLayoutProperty("hunter-mass", "visibility", podium > 0.1 ? "visible" : "none");
-  map.setPaintProperty("hunter-mass", "fill-extrusion-base", 0);
-  map.setPaintProperty("hunter-mass", "fill-extrusion-height", podium);
-  map.setPaintProperty("hunter-mass", "fill-extrusion-color", "#d8d3cb");
-  map.setFilter("hallways", indoorFilter("hallway", floor));
-  map.setFilter("rooms", indoorFilter("room", floor));
-  map.setPaintProperty("hallways", "fill-extrusion-base", base);
-  map.setPaintProperty("hallways", "fill-extrusion-height", base + 0.5);
-  map.setPaintProperty("rooms", "fill-extrusion-base", base);
-  map.setPaintProperty("rooms", "fill-extrusion-height", base + 3.1);
+  map.setFilter("stacked-podiums", stackedPodiumFilter(floor, buildingId));
+  map.setFilter("floor-plate", indoorFilter("floor", floor, buildingId));
+  map.setFilter("hallways", indoorFilter("hallway", floor, buildingId));
+  map.setFilter("rooms", indoorFilter("room", floor, buildingId));
+  map.setFilter("walls", indoorFilter("wall", floor, buildingId));
 }
 
-export function MapView({ buildingId, floor, selectedRoom, onSelectRoom }: Props) {
+export function MapView({ buildingId, floor, panelOpen, selectedRoom, onSelectRoom }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const onSelectRoomRef = useRef(onSelectRoom);
   const floorRef = useRef(floor);
+  const buildingIdRef = useRef(buildingId);
   const dataRef = useRef<FloorFeature[]>([]);
-  const didFit = useRef(false);
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState("Loading campus map…");
   onSelectRoomRef.current = onSelectRoom;
   floorRef.current = floor;
+  buildingIdRef.current = buildingId;
 
   useEffect(() => {
     if (!rootRef.current || mapRef.current) return;
@@ -156,7 +226,7 @@ export function MapView({ buildingId, floor, selectedRoom, onSelectRoom }: Props
       bearing: -29,
       canvasContextAttributes: { preserveDrawingBuffer: true, antialias: true, contextType: "webgl2" },
     });
-    map.addControl(new NavigationControl({ visualizePitch: true }), "top-right");
+    map.addControl(new NavigationControl({ visualizePitch: true }), "bottom-right");
     mapRef.current = map;
 
     let cancelled = false;
@@ -164,12 +234,22 @@ export function MapView({ buildingId, floor, selectedRoom, onSelectRoom }: Props
       if (cancelled || map.getSource("floors")) return;
       try {
         hideBasemapExtrusions(map);
-        const response = await fetch("/data/hunter-floors.geojson");
+        const response = await fetch("/data/hunter-floors.geojson?v=4");
         if (!response.ok) throw new Error(`Could not load floor data (${response.status})`);
         const data = await response.json();
         if (cancelled) return;
         dataRef.current = data.features;
         map.addSource("floors", { type: "geojson", data, promoteId: "id" });
+        map.addLayer({
+          id: "campus-flat",
+          type: "fill",
+          source: "floors",
+          filter: ["==", ["get", "kind"], "context"],
+          paint: {
+            "fill-color": "#cbc8c2",
+            "fill-opacity": 0.9,
+          },
+        });
         map.addLayer({
           id: "hunter-mass",
           type: "fill-extrusion",
@@ -180,33 +260,110 @@ export function MapView({ buildingId, floor, selectedRoom, onSelectRoom }: Props
             "fill-extrusion-base": 0,
             "fill-extrusion-height": ["get", "height"],
             "fill-extrusion-opacity": 1,
+            "fill-extrusion-vertical-gradient": true,
+          },
+        });
+        map.addLayer({
+          id: "hunter-bridges",
+          type: "fill-extrusion",
+          source: "floors",
+          filter: ["==", ["get", "kind"], "bridge"],
+          paint: {
+            "fill-extrusion-color": "#5b238a",
+            "fill-extrusion-base": ["get", "base"],
+            "fill-extrusion-height": ["get", "height"],
+            "fill-extrusion-opacity": 1,
+            "fill-extrusion-vertical-gradient": true,
+          },
+        });
+        map.addLayer({
+          id: "stacked-podiums",
+          type: "fill-extrusion",
+          source: "floors",
+          filter: stackedPodiumFilter(floorRef.current, buildingIdRef.current),
+          paint: {
+            "fill-extrusion-color": "#d2d0ca",
+            "fill-extrusion-base": ["get", "base"],
+            "fill-extrusion-height": ["+", ["get", "base"], STOREY_HEIGHT],
+            "fill-extrusion-opacity": 1,
+            "fill-extrusion-vertical-gradient": true,
+          },
+        });
+        map.addLayer({
+          id: "floor-plate",
+          type: "fill-extrusion",
+          source: "floors",
+          filter: indoorFilter("floor", floorRef.current, buildingIdRef.current),
+          paint: {
+            "fill-extrusion-color": "#fbfbfa",
+            "fill-extrusion-base": ["get", "base"],
+            "fill-extrusion-height": ["get", "height"],
+            "fill-extrusion-opacity": 1,
+            "fill-extrusion-vertical-gradient": false,
           },
         });
         map.addLayer({
           id: "hallways",
           type: "fill-extrusion",
           source: "floors",
-          filter: indoorFilter("hallway", floorRef.current),
+          filter: indoorFilter("hallway", floorRef.current, buildingIdRef.current),
           paint: {
-            "fill-extrusion-color": "#ece7de",
-            "fill-extrusion-base": 0,
-            "fill-extrusion-height": 0.5,
+            "fill-extrusion-color": "#f8f9fa",
+            "fill-extrusion-base": ["get", "base"],
+            "fill-extrusion-height": ["get", "height"],
             "fill-extrusion-opacity": 1,
+            "fill-extrusion-vertical-gradient": false,
           },
         });
         map.addLayer({
           id: "rooms",
           type: "fill-extrusion",
           source: "floors",
-          filter: indoorFilter("room", floorRef.current),
+          filter: indoorFilter("room", floorRef.current, buildingIdRef.current),
           paint: {
-            "fill-extrusion-color": "#6d28d9",
-            "fill-extrusion-base": 0,
-            "fill-extrusion-height": 3.1,
+            "fill-extrusion-color": roomColor(null),
+            "fill-extrusion-base": ["get", "base"],
+            "fill-extrusion-height": ["get", "height"],
             "fill-extrusion-opacity": 1,
+            "fill-extrusion-vertical-gradient": false,
           },
         });
-        setMode(map, floorRef.current);
+        map.addLayer({
+          id: "walls",
+          type: "fill-extrusion",
+          source: "floors",
+          filter: indoorFilter("wall", floorRef.current, buildingIdRef.current),
+          paint: {
+            "fill-extrusion-color": "#74777d",
+            "fill-extrusion-base": ["get", "base"],
+            "fill-extrusion-height": ["get", "height"],
+            "fill-extrusion-opacity": 1,
+            "fill-extrusion-vertical-gradient": false,
+          },
+        });
+        map.addLayer({
+          id: "building-labels",
+          type: "symbol",
+          source: "floors",
+          filter: ["==", ["get", "kind"], "mass"],
+          layout: {
+            "symbol-placement": "point",
+            "text-field": ["get", "name"],
+            "text-size": 12,
+            "text-max-width": 9,
+            "text-allow-overlap": true,
+            "text-pitch-alignment": "map",
+            "text-rotation-alignment": "map",
+            "symbol-height-anchor": "absolute",
+            "symbol-height-offset": ["+", ["get", "height"], 1],
+          },
+          paint: {
+            "text-color": "#ffffff",
+            "text-halo-color": "#4b1d72",
+            "text-halo-width": 1.25,
+          },
+        });
+        setMode(map, floorRef.current, buildingIdRef.current);
         map.on("click", "rooms", (event) => {
           const roomId = event.features?.[0]?.properties?.roomId;
           if (roomId) onSelectRoomRef.current(String(roomId));
@@ -258,29 +415,20 @@ export function MapView({ buildingId, floor, selectedRoom, onSelectRoom }: Props
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map?.getLayer("rooms")) return;
-    setMode(map, floor);
-  }, [ready, floor]);
+    setMode(map, floor, buildingId);
+  }, [ready, floor, buildingId]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map?.getLayer("rooms")) return;
-    map.setPaintProperty("rooms", "fill-extrusion-color", roomColor(selectedRoom, buildingId));
-    if (floor == null) {
-      map.setPaintProperty(
-        "hunter-mass",
-        "fill-extrusion-color",
-        buildingId
-          ? ["case", ["==", ["get", "building"], buildingId], "#6d28d9", "#a78bfa"]
-          : "#6d28d9",
-      );
-    }
-  }, [ready, selectedRoom, buildingId, floor]);
+    map.setPaintProperty("rooms", "fill-extrusion-color", roomColor(selectedRoom));
+  }, [ready, selectedRoom]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map) return;
-    fitFeatures(map, dataRef.current, floor);
-  }, [ready, floor]);
+    fitFeatures(map, dataRef.current, floor, buildingId, panelOpen);
+  }, [ready, floor, buildingId, panelOpen]);
 
   return (
     <div className="relative h-full min-h-0 w-full">

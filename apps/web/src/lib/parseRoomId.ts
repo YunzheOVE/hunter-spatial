@@ -1,11 +1,13 @@
+import type { CampusBuildingId } from "./campusLevels";
+
 export type ParsedRoomId = {
   id: string;
-  buildingId: string;
+  buildingId: CampusBuildingId;
   floor: number;
   room: string;
 };
 
-const PREFIXES: Array<[string, string]> = [
+const PREFIXES: Array<[string, CampusBuildingId]> = [
   ["BTB", "BTB"],
   ["TH", "TH"],
   ["EB", "E"],

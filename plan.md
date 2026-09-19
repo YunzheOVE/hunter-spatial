@@ -92,9 +92,43 @@ Routing graph, Directions UI, smart labels/icons, Pannellum, `.ics`, RAG.
 
 ### Milestone 2: Multi-building routing and skybridges
 
-1. Parse corridor nodes and vertical connectors into `public/data/routing-graph.json`. Prefer the graph already in the HAR.
-2. Cross-building links: connect Hunter West and Hunter North on level 3 via the 68th Street / Lexington Avenue skybridge **if that connection is in the data**. Do not invent a link the extract does not support.
-3. Client-side A* (`ngraph.path`) between room **entrance nodes**. Draw the route as a line layer on the current floor.
+**Goal:** Campus-wide indoor pathfinding across rooms, floors, and buildings using A* on Hunter's real walkable graph.
+
+#### Verified data findings from `venue.zip`
+- `node.geojson`: 7,161 nodes with exact WGS84 `[lon, lat]` coordinates and neighbor edge weights.
+- `connection.json`: 112 vertical/cross-building connectors (35 stairs, 30 elevators, 18 escalators, 29 doors).
+  - East–West connector: `"East to West Building Door - Level 3 Bridge"` (the 68th St / Lexington Ave skybridge).
+  - North–Thomas Hunter connector: `"North L3 to TH L2 Door"`.
+- Room entrance mapping: All 2,914 named spaces in `venue.zip` have explicit `destinationNodes` connecting each room to its corridor node outside the door (no centroid guessing).
+
+#### Implementation steps
+1. **Offline graph normalization (`scripts/build_routing_graph.py`):**
+   - Extract `node.geojson` and `connection.json` from `data/raw/venue.zip`.
+   - Cross-reference `map.json` to attach `building` (`N`, `W`, `E`, `TH`, `BTB`), `level`, and `base` elevation.
+   - Build horizontal corridor links and vertical/bridge links (`stairs`, `elevator`, `escalator`, `bridge`) with `accessible` flags.
+   - Map `canonicalRoomId` (e.g., `N304`) to entrance `nodeId`.
+   - Output: `apps/web/public/data/routing-graph.json`.
+   - Add converter tests: `scripts/test_routing_graph.py`.
+
+2. **Client-side A* pathfinding (`apps/web/src/lib/pathfinding.ts`):**
+   - Install `ngraph.graph` and `ngraph.path` in `apps/web`.
+   - Load and cache `routing-graph.json`.
+   - Implement `findRoute(fromRoomId, toRoomId, options?: { accessibleOnly?: boolean })`:
+     - Resolve entrance nodes, execute A* with 3D Euclidean heuristic and vertical transition weighting.
+     - Structure output into floor `legs` (`building`, `level`, coordinates `[lon, lat][]`), `transitions` (stairs/elevator/bridge), and estimated distance/time.
+   - Add Vitest tests in `apps/web/src/lib/pathfinding.test.ts`.
+
+3. **Route visualization in MapLibre (`MapView.tsx`):**
+   - Add GeoJSON source and line layer (`route-line`) styled above hallways and rooms.
+   - Render the route leg corresponding to the currently selected `floor` and `building`.
+   - Add start/destination pins and transition markers (stair/elevator/bridge icons) at floor handoffs.
+   - Camera auto-fits the active route segment.
+
+4. **Directions UI in `CampusApp.tsx`:**
+   - Directions panel with `Start Room` (defaults to current selection) and `Destination Room` inputs.
+   - Accessible route toggle (avoids stairs/escalators).
+   - Turn-by-turn / leg summary (e.g., "Walk corridor on Level 3" → "Cross Level 3 Skybridge to West" → "Take Elevator to Level 5").
+   - Clicking any step or leg automatically navigates the map to that floor and building.
 
 ### Milestone 3: 360° portals and class schedule
 
