@@ -76,6 +76,78 @@ def parse_level(name: str, short_name: str = "", elevation: int | float | None =
     return int(elevation) + 1 if elevation is not None else 1
 
 
+CAMPUS_BUILDING_NAMES = {
+    "W": "West Building",
+    "N": "North Building",
+    "E": "East Building",
+    "TH": "Thomas Hunter",
+    "BTB": "Baker Theatre",
+}
+
+
+def floor_to_str(level: int) -> str:
+    if level == 0:
+        return "C"
+    if level < 0:
+        return f"B{abs(level)}"
+    return str(level)
+
+
+def format_facility_room(
+    name: str,
+    external_id: str = "",
+    building: str = "",
+    level: int | None = None,
+    type_idx: int = 1,
+    type_total: int = 1,
+) -> tuple[str, str]:
+    """
+    Returns (room_id, display_name) for rooms and facility spaces.
+    If the room has a canonical Hunter code (e.g. W304, N1021, N132C, WB3W01), returns that.
+    If it is a generic washroom/restroom, assigns a specific unique code such as
+    N10-WOMEN, N9-MEN, W3-MEN, etc.
+    """
+    n_lower = name.lower()
+    is_washroom = any(w in n_lower for w in ("washroom", "restroom", "toilet", "bathroom"))
+
+    canon = canonical_room_id(name, external_id)
+    if canon and canon != name.strip():
+        if is_washroom:
+            return canon, f"{name.strip()} ({canon})"
+        return canon, name.strip() or canon
+
+    clean_ext = (external_id or "").strip()
+    if clean_ext and not clean_ext.startswith("POLY-") and len(clean_ext) <= 7 and re.match(r"^[0-9]+[A-Z0-9-]*$", clean_ext):
+        code = f"{building}{clean_ext}" if building and not clean_ext.startswith(building) else clean_ext
+        return code, f"{name.strip()} ({code})"
+
+    if is_washroom and building and level is not None:
+        f_str = floor_to_str(level)
+        if "women" in n_lower or "female" in n_lower:
+            type_code = "WOMEN"
+            disp = "Women's Washroom"
+        elif "men" in n_lower or "male" in n_lower:
+            type_code = "MEN"
+            disp = "Men's Washroom"
+        elif "all gender" in n_lower or "gender neutral" in n_lower:
+            type_code = "ALLGENDER"
+            disp = "All Gender Restroom"
+        else:
+            type_code = "RESTROOM"
+            disp = "Washroom"
+
+        b_name = CAMPUS_BUILDING_NAMES.get(building, f"{building} Building")
+        if type_total > 1:
+            room_id = f"{building}{f_str}-{type_code}-{type_idx}"
+            disp_name = f"{disp} {type_idx} ({b_name} L{f_str})"
+        else:
+            room_id = f"{building}{f_str}-{type_code}"
+            disp_name = f"{disp} ({b_name} L{f_str})"
+        return room_id, disp_name
+
+    return name.strip(), name.strip()
+
+
 def canonical_room_id(name: str, external_id: str = "") -> str:
     """Return a searchable Hunter room code, or the display name for landmarks."""
     for value in (name, external_id):
@@ -325,6 +397,26 @@ def convert(
         building = group_buildings.get(mapped_map.get("group") or "", "")
         base = max(0.0, (level - 1) * STOREY_M)
 
+        # Pre-count washrooms on this floor to generate unique index suffixes if multiple exist
+        washroom_totals: dict[str, int] = defaultdict(int)
+        for feature in spaces:
+            if feature.get("geometry", {}).get("type") not in {"Polygon", "MultiPolygon"}:
+                continue
+            if _raw_id(feature) in IGNORED_PILLAR_IDS:
+                continue
+            fn = _feature_name(feature).lower()
+            if any(w in fn for w in ("washroom", "restroom", "toilet", "bathroom")):
+                if "women" in fn or "female" in fn:
+                    washroom_totals["WOMEN"] += 1
+                elif "men" in fn or "male" in fn:
+                    washroom_totals["MEN"] += 1
+                elif "all gender" in fn or "gender neutral" in fn:
+                    washroom_totals["ALLGENDER"] += 1
+                else:
+                    washroom_totals["RESTROOM"] += 1
+
+        washroom_indices: dict[str, int] = defaultdict(int)
+
         for feature in spaces:
             if feature.get("geometry", {}).get("type") not in {"Polygon", "MultiPolygon"}:
                 continue
@@ -352,7 +444,29 @@ def convert(
             elif name:
                 kind = "room"
                 thickness = ROOM_HEIGHT_M
-                room_id = canonical_room_id(name, str(props.get("externalId") or ""))
+                n_lower = name.lower()
+                is_washroom = any(w in n_lower for w in ("washroom", "restroom", "toilet", "bathroom"))
+                if is_washroom:
+                    if "women" in n_lower or "female" in n_lower:
+                        w_type = "WOMEN"
+                    elif "men" in n_lower or "male" in n_lower:
+                        w_type = "MEN"
+                    elif "all gender" in n_lower or "gender neutral" in n_lower:
+                        w_type = "ALLGENDER"
+                    else:
+                        w_type = "RESTROOM"
+                    washroom_indices[w_type] += 1
+                    room_id, display_name = format_facility_room(
+                        name,
+                        str(props.get("externalId") or ""),
+                        building=building,
+                        level=level,
+                        type_idx=washroom_indices[w_type],
+                        type_total=washroom_totals[w_type],
+                    )
+                    name = display_name
+                else:
+                    room_id = canonical_room_id(name, str(props.get("externalId") or ""))
                 color = venue_color or "#ffffff"
             elif layer == "Connection" or (not layer and is_walkable):
                 kind = "hallway"

@@ -12,4 +12,5 @@ __pycache__/
 data/raw/
 apps/web/public/maplibre/
 scripts/scratch*.py
+scratch/
 project/

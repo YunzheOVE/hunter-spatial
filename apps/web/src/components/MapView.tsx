@@ -546,8 +546,15 @@ function setMode(
   ) as FilterSpecification;
 
   if (map.getLayer("campus-room-labels")) map.setFilter("campus-room-labels", markerFilter);
-  if (map.getLayer("route-ribbons")) map.setFilter("route-ribbons", ["==", ["get", "level"], floor]);
-  if (map.getLayer("route-markers-label")) map.setFilter("route-markers-label", ["==", ["get", "level"], floor]);
+
+  const routeFilter: FilterSpecification = [
+    "any",
+    ["==", ["get", "level"], floor],
+    ["==", ["get", "toLevel"], floor],
+  ] as unknown as FilterSpecification;
+
+  if (map.getLayer("route-ribbons")) map.setFilter("route-ribbons", routeFilter);
+  if (map.getLayer("route-markers-label")) map.setFilter("route-markers-label", routeFilter);
 }
 
 export function MapView({
@@ -564,6 +571,7 @@ export function MapView({
   const mapRef = useRef<MapLibreMap | null>(null);
   const onSelectRoomRef = useRef(onSelectRoom);
   const floorRef = useRef(floor);
+  const panelOpenRef = useRef(panelOpen);
   const buildingIdRef = useRef(buildingId);
   const activeRouteRef = useRef(activeRoute);
   const activeLegIndexRef = useRef(activeLegIndex);
@@ -573,6 +581,7 @@ export function MapView({
   const [status, setStatus] = useState("Loading campus map…");
   onSelectRoomRef.current = onSelectRoom;
   floorRef.current = floor;
+  panelOpenRef.current = panelOpen;
   buildingIdRef.current = buildingId;
   activeRouteRef.current = activeRoute;
   activeLegIndexRef.current = activeLegIndex;
@@ -788,7 +797,7 @@ export function MapView({
             "fill-extrusion-color": ["coalesce", ["get", "color"], "#8b5cf6"],
             "fill-extrusion-base": ["get", "base"],
             "fill-extrusion-height": ["get", "height"],
-            "fill-extrusion-opacity": 0.95,
+            "fill-extrusion-opacity": 0.65,
             "fill-extrusion-vertical-gradient": true,
           },
         });
@@ -912,6 +921,13 @@ export function MapView({
     const map = mapRef.current;
     if (!ready || !map?.getLayer("rooms")) return;
     setMode(map, floor, buildingId, directionMode);
+    // Keep the 3D structure legible through the route and nearby rooms.
+    map.setPaintProperty("rooms", "fill-extrusion-opacity", directionMode ? 0.35 : 1);
+    map.setPaintProperty("walls", "fill-extrusion-opacity", directionMode ? 0.5 : 1);
+    if (map.getLayer("campus-room-labels")) {
+      map.setPaintProperty("campus-room-labels", "icon-opacity", directionMode ? 0.3 : 1);
+      map.setPaintProperty("campus-room-labels", "text-opacity", directionMode ? 0.4 : 1);
+    }
   }, [ready, floor, buildingId, directionMode]);
 
   useEffect(() => {
@@ -932,18 +948,21 @@ export function MapView({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!ready || !map) return;
+    // Exploring changes visible content, never the user's camera position.
+    if (!ready || !map || !directionMode || !activeRoute || activeLegIndex == null) return;
     fitFeatures(
       map,
       dataRef.current,
-      floor,
-      buildingId,
-      panelOpen,
+      floorRef.current,
+      buildingIdRef.current,
+      panelOpenRef.current,
       activeRoute,
       activeLegIndex,
       directionMode
     );
-  }, [ready, floor, buildingId, panelOpen, activeRoute, activeLegIndex, directionMode]);
+    // Stop a route animation if the user leaves Directions mid-transition.
+    return () => { map.stop(); };
+  }, [ready, activeRoute, activeLegIndex, directionMode]);
 
   return (
     <div className="relative h-full min-h-0 w-full">

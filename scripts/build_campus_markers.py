@@ -55,7 +55,7 @@ def categorize_room(name: str, room_id: str) -> dict:
             "iconBadge": "badge-restroom-women",
             "displayCode": "",
             "icon": "🚺",
-            "label": "🚺 Women's",
+            "label": f"🚺 Women's ({room_id})" if room_id else "🚺 Women's",
         }
     if "men's washroom" in n_lower or "male" in n_lower or "men" in n_lower:
         return {
@@ -63,7 +63,7 @@ def categorize_room(name: str, room_id: str) -> dict:
             "iconBadge": "badge-restroom-men",
             "displayCode": "",
             "icon": "🚹",
-            "label": "🚹 Men's",
+            "label": f"🚹 Men's ({room_id})" if room_id else "🚹 Men's",
         }
     if "washroom" in n_lower or "restroom" in n_lower or "toilet" in n_lower:
         return {
@@ -71,7 +71,7 @@ def categorize_room(name: str, room_id: str) -> dict:
             "iconBadge": "badge-restroom",
             "displayCode": "",
             "icon": "🚻",
-            "label": "🚻 Restroom",
+            "label": f"🚻 Restroom ({room_id})" if room_id else "🚻 Restroom",
         }
     if "stair" in n_lower:
         return {

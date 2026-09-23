@@ -1,7 +1,10 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
+import { RoomCard } from "./RoomCard";
+import { LevelControl } from "./LevelControl";
+import { ROOM_MEDIA } from "@/lib/roomMedia";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   campusLevelsForSelection,
   type CampusBuildingId,
@@ -36,6 +39,8 @@ export function CampusApp() {
   const [error, setError] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
 
+  const [panoramasOnly, setPanoramasOnly] = useState(false);
+
   // Directions state
   const [originQuery, setOriginQuery] = useState("");
   const [destinationQuery, setDestinationQuery] = useState("");
@@ -44,6 +49,11 @@ export function CampusApp() {
   const [accessibleOnly, setAccessibleOnly] = useState(false);
   const [activeRoute, setActiveRoute] = useState<RouteResult | null>(null);
   const [activeLegIndex, setActiveLegIndex] = useState<number | null>(null);
+  const navigating = activeRoute != null && activeLegIndex != null;
+  const activeStepRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    activeStepRef.current?.scrollIntoView({ block: "nearest" });
+  }, [activeLegIndex]);
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeError, setRouteError] = useState<string | null>(null);
   const [routingGraph, setRoutingGraph] = useState<RoutingGraphData | null>(null);
@@ -67,6 +77,27 @@ export function CampusApp() {
     [routingGraph]
   );
 
+  const searchTerm = query.trim().toLowerCase();
+  const exploreResults = roomKeys.filter((id) => {
+    const room = routingGraph!.rooms[id];
+    const term = searchTerm;
+    return (!panoramasOnly || Boolean(ROOM_MEDIA[id]?.panorama)) &&
+      (!buildingId || room.building === buildingId) &&
+      (!term || `${id} ${room.name}`.toLowerCase().includes(term));
+  });
+  const selectedDetails = selectedRoom && routingGraph ? resolveRoom(routingGraph, selectedRoom) : null;
+  const selectedInfo = selectedDetails ? routingGraph?.rooms[selectedDetails.roomId] : null;
+
+  function selectExploreRoom(id: string) {
+    const room = routingGraph?.rooms[id];
+    if (!room) return;
+    setSelectedRoom(id);
+    setQuery(id);
+    setBuildingId(room.building as CampusBuildingId);
+    setFloor(room.level);
+    setError(null);
+  }
+
   const getSuggestions = (queryText: string, isFocused: boolean): RoomSuggestion[] => {
     if (!routingGraph || !isFocused) return [];
     const q = queryText.trim().toUpperCase();
@@ -81,12 +112,26 @@ export function CampusApp() {
     }
 
     const results: RoomSuggestion[] = [];
+    const tokens = q.split(/\s+/).filter(Boolean);
+
+    // If query resolves to a specific location (e.g. natural language facility search), prioritize it
+    const resolved = resolveRoom(routingGraph, queryText);
+    if (resolved) {
+      results.push({
+        id: resolved.roomId,
+        name: resolved.room.name,
+        building: resolved.room.building,
+        level: resolved.room.level,
+      });
+    }
+
     for (const key of roomKeys) {
+      if (resolved && key === resolved.roomId) continue;
       const r = routingGraph.rooms[key];
       if (!r) continue;
-      const matchKey = key.toUpperCase().includes(q);
-      const matchName = r.name && r.name.toUpperCase().includes(q);
-      if (matchKey || matchName) {
+      const combined = `${key} ${r.name || ""}`.toUpperCase();
+      const matchAll = tokens.every((tok) => combined.includes(tok));
+      if (matchAll) {
         results.push({ id: key, name: r.name, building: r.building, level: r.level });
         if (results.length >= 7) break;
       }
@@ -130,26 +175,94 @@ export function CampusApp() {
     selectLeg(activeLegIndex + 1);
   }
 
-  function getLegInstruction(
-    leg: RouteLeg,
-    index: number,
-    totalLegs: number,
-    fromRoom: string,
-    toRoom: string
-  ): string {
-    const bName = BUILDINGS.find((b) => b.id === leg.building)?.name ?? `${leg.building} Building`;
-    const levelText = leg.level === 0 ? "Concourse" : `Level ${leg.level}`;
+  // ── Turn-by-turn instruction helpers ──────────────────────────────
 
-    if (totalLegs === 1) {
-      return `Walk along ${levelText} corridor directly from ${fromRoom} to ${toRoom}.`;
+  type DirectionStep = {
+    icon: string;
+    text: string;
+    subtext?: string;
+    isTransition: boolean;
+    transitionType?: "elevator" | "stairs" | "bridge" | "escalator" | "connector";
+    legIndex: number;
+  };
+
+  function generateDirectionSteps(route: RouteResult): DirectionStep[] {
+    const steps: DirectionStep[] = [];
+    const { legs, transitions, fromRoom, toRoom } = route;
+
+    for (let i = 0; i < legs.length; i++) {
+      const leg = legs[i];
+      const bName = BUILDINGS.find((b) => b.id === leg.building)?.name ?? `${leg.building} Building`;
+      const levelText = leg.level === 0 ? "Concourse" : `Level ${leg.level}`;
+
+      if (i === 0) {
+        steps.push({
+          icon: "🚶",
+          text: `Leave ${fromRoom} and head out`,
+          subtext: `${bName} · ${levelText}`,
+          isTransition: false,
+          legIndex: i,
+        });
+      } else {
+        // After a transition, describe the continuation
+        const prevTransition = transitions[i - 1];
+        if (prevTransition) {
+          const exitVerb =
+            prevTransition.type === "elevator" ? "Exit elevator" :
+            prevTransition.type === "stairs" ? "Exit stairwell" :
+            prevTransition.type === "bridge" ? "Continue" :
+            "Continue";
+
+          if (i === legs.length - 1) {
+            steps.push({
+              icon: "➡️",
+              text: `${exitVerb} and head to ${toRoom}`,
+              subtext: `${bName} · ${levelText}`,
+              isTransition: false,
+              legIndex: i,
+            });
+          } else {
+            steps.push({
+              icon: "➡️",
+              text: `${exitVerb} and continue along ${levelText}`,
+              subtext: bName,
+              isTransition: false,
+              legIndex: i,
+            });
+          }
+        }
+      }
+
+      // If there is a transition after this leg, add the transition step
+      if (transitions[i]) {
+        const t = transitions[i];
+        let icon = "🔀";
+        if (t.type === "elevator") icon = "🛗";
+        else if (t.type === "stairs") icon = "🪜";
+        else if (t.type === "bridge") icon = "🌉";
+        else if (t.type === "escalator") icon = "↗️";
+
+        steps.push({
+          icon,
+          text: t.description,
+          subtext: `Less than a minute`,
+          isTransition: true,
+          transitionType: t.type,
+          legIndex: i,
+        });
+      }
     }
-    if (index === 0) {
-      return `Depart from ${fromRoom} and follow the ${levelText} hallway in ${bName}.`;
-    }
-    if (index === totalLegs - 1) {
-      return `Continue along ${levelText} in ${bName} to arrive at ${toRoom}.`;
-    }
-    return `Walk along ${levelText} corridor across ${bName}.`;
+
+    // Final arrive step
+    steps.push({
+      icon: "📍",
+      text: `Arrive at ${toRoom}`,
+      subtext: undefined,
+      isTransition: false,
+      legIndex: legs.length - 1,
+    });
+
+    return steps;
   }
 
   const directionMode = tab === "directions" || Boolean(activeRoute);
@@ -198,11 +311,19 @@ export function CampusApp() {
 
   function goToQuery() {
     try {
+      if (routingGraph) {
+        const resolved = resolveRoom(routingGraph, query);
+        const exactName = roomKeys.find((id) => routingGraph.rooms[id].name.toLowerCase() === query.trim().toLowerCase());
+        const match = resolved?.roomId ?? exactName;
+        if (match) { selectExploreRoom(match); return; }
+        setError("Room not found. Choose a matching location or check the room number.");
+        return;
+      }
       const parsed = parseRoomId(query);
       const roomId = canonicalRoomId(parsed);
       setError(null);
       setBuildingId(parsed.buildingId);
-      setFloor(parsed.floor || 1);
+      setFloor(parsed.floor);
       setSelectedRoom(roomId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not find that room");
@@ -223,6 +344,8 @@ export function CampusApp() {
       return;
     }
 
+    setActiveRoute(null);
+    setActiveLegIndex(null);
     setRouteLoading(true);
     setRouteError(null);
 
@@ -257,7 +380,7 @@ export function CampusApp() {
       }
 
       setActiveRoute(result);
-      setActiveLegIndex(0);
+      setActiveLegIndex(null);
 
       // In direction mode, keep all buildings visible so users see full campus context
       setBuildingId(null);
@@ -302,6 +425,7 @@ export function CampusApp() {
 
   function startDirectionsFrom(roomId: string) {
     setTab("directions");
+    setPanelOpen(true);
     setOriginQuery(roomId);
     if (destinationQuery && destinationQuery !== roomId) {
       calculateRoute(roomId, destinationQuery);
@@ -310,6 +434,7 @@ export function CampusApp() {
 
   function startDirectionsTo(roomId: string) {
     setTab("directions");
+    setPanelOpen(true);
     setDestinationQuery(roomId);
     if (originQuery && originQuery !== roomId) {
       calculateRoute(originQuery, roomId);
@@ -317,6 +442,7 @@ export function CampusApp() {
   }
 
   function handleMapRoomClick(roomId: string) {
+    if (navigating) return;
     setSelectedRoom(roomId);
     if (tab === "explore") {
       setQuery(roomId);
@@ -334,6 +460,12 @@ export function CampusApp() {
     }
   }
 
+  // Compute direction steps for the active route
+  const directionSteps = useMemo(
+    () => (activeRoute ? generateDirectionSteps(activeRoute) : []),
+    [activeRoute]
+  );
+
   return (
     <div className="relative h-dvh min-h-0 overflow-hidden bg-[#f4f3ef] text-[#41434a]">
       <main className="absolute inset-0">
@@ -347,25 +479,55 @@ export function CampusApp() {
           activeLegIndex={activeLegIndex}
           directionMode={directionMode}
         />
-        <div className="pointer-events-none absolute top-4 right-4 z-10 max-w-[calc(100%-2rem)] rounded-2xl bg-white/95 px-4 py-3 text-sm font-medium shadow-[0_8px_30px_rgba(39,38,44,0.14)] backdrop-blur md:top-5 md:right-5">
+        <div className={`${selectedRoom && tab === "explore" ? "hidden md:block" : ""} pointer-events-none absolute bottom-12 left-3 z-10 max-w-[calc(100%-6rem)] rounded-2xl bg-white/65 px-4 py-3 text-sm font-medium shadow-[0_8px_30px_rgba(39,38,44,0.14)] backdrop-blur-[3px] md:top-5 md:right-24 md:bottom-auto md:left-auto`}>
           {mapStatus}
         </div>
       </main>
 
+      {selectedRoom && tab === "explore" ? <RoomCard key={selectedRoom} id={selectedRoom} name={selectedInfo?.name ?? selectedRoom} building={BUILDINGS.find((b) => b.id === (selectedInfo?.building ?? buildingId))?.name ?? "Campus"} level={selectedInfo?.level ?? floor ?? 1} media={ROOM_MEDIA[selectedDetails?.roomId ?? selectedRoom]} onClose={() => { setSelectedRoom(null); setQuery(""); }} onDirections={() => startDirectionsTo(selectedRoom)} onFrom={() => startDirectionsFrom(selectedRoom)} /> : null}
+
+      <LevelControl levels={campusLevels} floor={floor} onSelect={selectFloor} />
+
       {panelOpen ? (
         <aside
           id="map-controls"
-          className="absolute top-3 right-3 left-3 z-20 flex max-h-[72dvh] flex-col overflow-y-auto rounded-[26px] border border-black/5 bg-white/95 p-5 shadow-[0_18px_55px_rgba(39,38,44,0.17)] backdrop-blur md:top-5 md:right-auto md:left-5 md:max-h-[calc(100dvh-2.5rem)] md:w-[380px]"
+          style={selectedRoom && tab === "explore" ? { maxHeight: "calc(60dvh - 5rem)" } : undefined}
+          className="[&>*]:shrink-0 absolute top-3 right-20 left-3 z-20 flex max-h-[60dvh] flex-col overflow-y-auto rounded-[26px] border border-white/65 bg-white/60 p-4 shadow-[0_18px_55px_rgba(39,38,44,0.17)] backdrop-blur-[3px] md:top-5 md:right-auto md:left-5 md:max-h-[calc(100dvh-2.5rem)] md:w-[340px]"
         >
+          {navigating ? (
+            <header>
+              <button type="button" onClick={() => setActiveLegIndex(null)} className="rounded-lg px-2 py-2 text-sm font-semibold text-[#5b238a]">← Back</button>
+              <h1 className="mt-2 text-base font-semibold text-[#2f3137]">Directions to {activeRoute.toRoom}</h1>
+              <p className="mt-0.5 text-xs text-[#555861]">{Math.max(1, Math.ceil(activeRoute.estimatedSeconds / 60))} minute total</p>
+
+              {/* ── Route progress bar ── */}
+              <div className="mt-3 flex items-center gap-1">
+                <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#10b981]" title="Start" />
+                <div className="flex flex-1 items-center">
+                  {activeRoute.transitions.length === 0 ? (
+                    <div className="h-0.5 flex-1 rounded bg-[#5b238a]" />
+                  ) : (
+                    activeRoute.transitions.map((t, ti) => (
+                      <div key={ti} className="flex flex-1 items-center">
+                        <div className={`h-0.5 flex-1 rounded ${activeLegIndex != null && activeLegIndex > ti ? "bg-[#5b238a]" : "bg-[#d4d0da]"}`} />
+                        <span className={`mx-0.5 flex h-5 w-5 items-center justify-center rounded-full text-[10px] ${activeLegIndex != null && activeLegIndex === ti ? "bg-[#f9cc45] ring-2 ring-[#f59e0b]" : "bg-[#f1edf4]"}`} title={t.description}>
+                          {t.type === "elevator" ? "🛗" : t.type === "stairs" ? "🪜" : t.type === "bridge" ? "🌉" : "↗️"}
+                        </span>
+                        <div className={`h-0.5 flex-1 rounded ${activeLegIndex != null && activeLegIndex > ti ? "bg-[#5b238a]" : "bg-[#d4d0da]"}`} />
+                      </div>
+                    ))
+                  )}
+                </div>
+                <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#f59e0b]" title="Destination" />
+              </div>
+            </header>
+          ) : <>
           <header className="relative">
             <div className="pr-16">
               <p className="text-sm font-semibold text-[#5b238a]">Hunter College</p>
-              <h1 className="mt-1 text-2xl font-semibold tracking-[-0.025em] text-[#2f3137]">
+              <h1 className="mt-1 text-xl font-semibold tracking-[-0.025em] text-[#2f3137]">
                 Campus wayfinding
               </h1>
-              <p className="mt-1.5 text-xs leading-4 text-[#747780]">
-                Interactive 3D indoor routing and building explorer.
-              </p>
             </div>
             <button
               type="button"
@@ -382,7 +544,8 @@ export function CampusApp() {
           <div className="mt-4 flex rounded-xl bg-[#f1edf4] p-1 text-xs font-semibold text-[#5b238a]">
             <button
               type="button"
-              onClick={() => setTab("explore")}
+              onClick={() => { setTab("explore"); setActiveRoute(null); setActiveLegIndex(null); }}
+              aria-pressed={tab === "explore"}
               className={`flex-1 rounded-lg py-1.5 transition focus-visible:outline-2 focus-visible:outline-[#5b238a] ${
                 tab === "explore"
                   ? "bg-white text-[#4b1d72] shadow-sm"
@@ -403,6 +566,7 @@ export function CampusApp() {
                   }
                 }
               }}
+              aria-pressed={tab === "directions"}
               className={`flex-1 rounded-lg py-1.5 transition focus-visible:outline-2 focus-visible:outline-[#5b238a] ${
                 tab === "directions"
                   ? "bg-white text-[#4b1d72] shadow-sm"
@@ -413,10 +577,12 @@ export function CampusApp() {
             </button>
           </div>
 
+          </>}
+
           {tab === "explore" ? (
             <>
               <label className="mt-4 block text-sm font-medium text-[#4c4f56]" htmlFor="room-search">
-                Room
+                Search rooms or places
               </label>
               <div className="mt-2 flex gap-2">
                 <input
@@ -424,8 +590,8 @@ export function CampusApp() {
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   onKeyDown={(event) => event.key === "Enter" && goToQuery()}
-                  className="min-w-0 flex-1 rounded-xl border border-[#dedfe3] bg-[#f5f6f8] px-3.5 py-2.5 text-sm text-[#2f3137] outline-none transition placeholder:text-[#92959d] focus:border-[#5b238a] focus:ring-2 focus:ring-[#5b238a]/15"
-                  placeholder="e.g. N11007, W305, E303"
+                  className="min-w-0 flex-1 rounded-xl border border-[#dedfe3] bg-white/65 px-3.5 py-2.5 text-sm text-[#2f3137] outline-none transition placeholder:text-[#92959d] focus:border-[#5b238a] focus:ring-2 focus:ring-[#5b238a]/15"
+                  placeholder="Room number or place name"
                 />
                 <button
                   type="button"
@@ -437,107 +603,41 @@ export function CampusApp() {
               </div>
               {error ? <p className="mt-2 text-sm text-[#b3261e]">{error}</p> : null}
 
-              {selectedRoom ? (
-                <div className="mt-4 rounded-2xl border border-[#e5dfeb] bg-[#faf8fc] p-3.5">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-xs font-semibold text-[#5b238a]">Selected Room</p>
-                      <p className="text-base font-bold text-[#2f3137]">{selectedRoom}</p>
-                    </div>
-                  </div>
-                  <div className="mt-2.5 flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => startDirectionsFrom(selectedRoom)}
-                      className="flex-1 rounded-xl bg-[#f1edf4] py-1.5 text-xs font-semibold text-[#5b238a] transition hover:bg-[#e8dfee]"
-                    >
-                      Directions from
+              <button type="button" aria-pressed={panoramasOnly} onClick={() => { setPanoramasOnly(!panoramasOnly); setQuery(""); }} className={`mt-3 w-fit rounded-full border px-3 py-1.5 text-xs font-semibold ${panoramasOnly ? "border-[#5b238a] bg-[#5b238a] text-white" : "border-[#5b238a]/25 bg-white/45 text-[#5b238a]"}`}>
+                360° locations
+              </button>
+              {panoramasOnly || (query.trim() && query !== selectedRoom) ? (
+                <div className="mt-2 max-h-44 overflow-y-auto rounded-xl bg-white/60" aria-label="Matching locations">
+                  {!routingGraph ? <p className="p-3 text-xs">Loading locations…</p> : exploreResults.length ? exploreResults.slice(0, 20).map((id) => (
+                    <button key={id} type="button" onClick={() => selectExploreRoom(id)} className="flex w-full items-center justify-between gap-2 border-b border-[#5b238a]/10 px-3 py-2 text-left text-sm hover:bg-white/70">
+                      <span><span className="font-semibold">{id}</span><span className="ml-2 text-xs">{routingGraph.rooms[id].name !== id ? routingGraph.rooms[id].name : ""}</span></span>
+                      {ROOM_MEDIA[id]?.panorama ? <span className="rounded-full bg-[#5b238a]/10 px-2 py-1 text-xs text-[#5b238a]">360°</span> : null}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => startDirectionsTo(selectedRoom)}
-                      className="flex-1 rounded-xl bg-[#5b238a] py-1.5 text-xs font-semibold text-white transition hover:bg-[#4b1d72]"
-                    >
-                      Directions to
-                    </button>
-                  </div>
+                  )) : <p role="status" className="p-3 text-xs leading-5">{panoramasOnly ? "No 360° locations here yet. Turn off the filter to find rooms and get directions." : "No matching locations. Try another room number or building."}</p>}
                 </div>
               ) : null}
 
-              <section className="mt-5" aria-labelledby="building-heading">
-                <div className="flex items-center justify-between gap-3">
-                  <h2 id="building-heading" className="text-sm font-semibold text-[#4c4f56]">Buildings</h2>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={selectAllBuildings}
-                      aria-pressed={floor != null && buildingId == null}
-                      className={`rounded-full px-3 py-1.5 text-xs font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5b238a] ${
-                        floor != null && buildingId == null
-                          ? "bg-[#5b238a] text-white"
-                          : "bg-[#f1edf4] text-[#5b238a] hover:bg-[#e8dfee]"
-                      }`}
-                    >
-                      All buildings
-                    </button>
-                    <button
-                      type="button"
-                      onClick={showOutdoor}
-                      aria-pressed={floor == null}
-                      className={`rounded-full px-3 py-1.5 text-xs font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5b238a] ${
-                        floor == null ? "bg-[#5b238a] text-white" : "bg-[#f1edf4] text-[#5b238a] hover:bg-[#e8dfee]"
-                      }`}
-                    >
-                      Outdoor
-                    </button>
-                  </div>
-                </div>
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  {BUILDINGS.map((building) => (
-                    <button
-                      key={building.id}
-                      type="button"
-                      onClick={() => selectBuilding(building.id)}
-                      aria-pressed={buildingId === building.id}
-                      className={`min-h-16 rounded-xl border px-3 py-2.5 text-left text-sm transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5b238a] ${
-                        buildingId === building.id
-                          ? "border-[#5b238a] bg-[#f1edf4] text-[#4b1d72]"
-                          : "border-[#e2e3e7] bg-[#f7f8f9] text-[#555861] hover:border-[#c8c9cf] hover:bg-white"
-                      }`}
-                    >
-                      <span className="block font-semibold">{building.id}</span>
-                      <span className="mt-0.5 block text-xs leading-4 text-[#747780]">{building.name}</span>
-                    </button>
-                  ))}
-                </div>
-              </section>
+              <label htmlFor="building-select" className="mt-4 block text-sm font-semibold">Building</label>
+              <select id="building-select" value={floor == null ? "outdoor" : buildingId ?? "all"} onChange={(event) => {
+                const value = event.target.value;
+                if (value === "outdoor") showOutdoor();
+                else if (value === "all") selectAllBuildings();
+                else selectBuilding(value as CampusBuildingId);
+              }} className="mt-2 w-full rounded-xl border border-[#dedfe3] bg-white/60 px-3 py-2.5 text-sm">
+                <option value="outdoor">Outdoor campus</option>
+                <option value="all">All buildings</option>
+                {BUILDINGS.map((building) => <option key={building.id} value={building.id}>{building.name}</option>)}
+              </select>
 
-              <section className="mt-5" aria-labelledby="floor-heading">
-                <h2 id="floor-heading" className="text-sm font-semibold text-[#4c4f56]">Campus level</h2>
-                <div className="mt-2 grid grid-cols-6 gap-1.5">
-                  {campusLevels.map((level) => (
-                    <button
-                      key={level}
-                      type="button"
-                      onClick={() => selectFloor(level)}
-                      aria-label={level === 0 ? "Concourse" : `Level ${level}`}
-                      aria-pressed={floor === level}
-                      className={`rounded-lg py-2 text-sm font-medium transition focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#5b238a] ${
-                        floor === level
-                          ? "bg-[#5b238a] text-white"
-                          : "bg-[#f2f3f5] text-[#555861] hover:bg-[#e7e8eb]"
-                      }`}
-                    >
-                      {level === 0 ? "C" : level}
-                    </button>
-                  ))}
-                </div>
-              </section>
+
+
+
             </>
           ) : (
             <div className="mt-4 flex flex-col gap-3">
+              {!navigating ? <>
               {/* Directions inputs */}
-              <div className="relative flex flex-col gap-2 rounded-2xl border border-[#dedfe3] bg-[#fafafc] p-3 shadow-xs">
+              <div className="relative flex flex-col gap-2 rounded-2xl border border-[#dedfe3] bg-white/50 p-3 shadow-xs">
                 {/* Origin Input */}
                 <div className="relative">
                   <div className="flex items-center gap-2">
@@ -545,7 +645,7 @@ export function CampusApp() {
                     <input
                       aria-label="Start room"
                       value={originQuery}
-                      onChange={(e) => setOriginQuery(e.target.value)}
+                      onChange={(e) => { setOriginQuery(e.target.value); setActiveRoute(null); setActiveLegIndex(null); }}
                       onFocus={() => setOriginFocused(true)}
                       onBlur={() => setTimeout(() => setOriginFocused(false), 200)}
                       onKeyDown={(e) => {
@@ -620,7 +720,7 @@ export function CampusApp() {
                     <input
                       aria-label="Destination room"
                       value={destinationQuery}
-                      onChange={(e) => setDestinationQuery(e.target.value)}
+                      onChange={(e) => { setDestinationQuery(e.target.value); setActiveRoute(null); setActiveLegIndex(null); }}
                       onFocus={() => setDestFocused(true)}
                       onBlur={() => setTimeout(() => setDestFocused(false), 200)}
                       onKeyDown={(e) => {
@@ -695,14 +795,14 @@ export function CampusApp() {
 
               {/* Action buttons */}
               <div className="flex gap-2">
-                <button
+                {!activeRoute ? <button
                   type="button"
                   onClick={() => calculateRoute()}
                   disabled={routeLoading || !originQuery || !destinationQuery}
                   className="flex-1 rounded-xl bg-[#5b238a] py-2.5 text-sm font-semibold text-white transition hover:bg-[#4b1d72] disabled:opacity-50"
                 >
                   {routeLoading ? "Calculating…" : "Get Directions"}
-                </button>
+                </button> : null}
                 {activeRoute || originQuery || destinationQuery ? (
                   <button
                     type="button"
@@ -720,165 +820,81 @@ export function CampusApp() {
                 </div>
               ) : null}
 
-              {/* Route overview & step-by-step legs */}
-              {activeRoute ? (
-                <div className="mt-2 flex flex-col gap-3">
-                  {/* Route Summary Card */}
-                  <div className="rounded-2xl border border-[#e5dfeb] bg-[#faf8fc] p-3.5 shadow-xs">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-[#5b238a]">
-                        {activeRoute.fromRoom} → {activeRoute.toRoom}
-                      </span>
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                          accessibleOnly || activeRoute.transitions.every((t) => t.type !== "stairs")
-                            ? "bg-[#ecfdf5] text-[#065f46]"
-                            : "bg-[#fffbeb] text-[#92400e]"
-                        }`}
-                      >
-                        {accessibleOnly || activeRoute.transitions.every((t) => t.type !== "stairs")
-                          ? "♿ Step-Free"
-                          : "🪜 Stairs"}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-lg font-bold text-[#2f3137]">
-                      {Math.round(activeRoute.totalDistanceMeters)} m{" "}
-                      <span className="text-xs font-normal text-[#747780]">
-                        (~{Math.ceil(activeRoute.estimatedSeconds / 60)} min walk)
-                      </span>
-                    </p>
-                    <p className="mt-0.5 text-xs text-[#747780]">{activeRoute.summary}</p>
+              </> : null}
+
+              {/* Route preview requires an explicit Start before guidance. */}
+              {activeRoute && !navigating ? (
+                <section aria-label="Route preview" className="rounded-2xl border border-[#e5dfeb] bg-white/65 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="font-semibold text-[#2f3137]">{Math.max(1, Math.ceil(activeRoute.estimatedSeconds / 60))} min · {Math.round(activeRoute.totalDistanceMeters)} m</p>
+                    <button type="button" onClick={() => selectLeg(0)} disabled={!activeRoute.legs.length} className="rounded-full bg-[#5b238a] px-5 py-2 text-sm font-semibold text-white hover:bg-[#4b1d72] disabled:opacity-40">Start</button>
+                  </div>
+                  <p className="mt-2 text-xs text-[#555861]">{activeRoute.fromRoom} → {activeRoute.toRoom}</p>
+                  <p className="mt-1 text-xs text-[#555861]">{activeRoute.transitions.some((transition) => transition.type === "stairs") ? "Includes stairs" : "Step-free route"}</p>
+                </section>
+              ) : null}
+
+              {/* ── Mappedin-style turn-by-turn directions ── */}
+              {activeRoute && navigating ? (
+                <section aria-label="Step-by-step directions" className="flex flex-col gap-3">
+                  {/* Origin section header */}
+                  <div className="flex items-center gap-2 px-1">
+                    <span className="inline-block h-2 w-2 rounded-full bg-[#10b981]" />
+                    <span className="text-sm font-bold text-[#2f3137]">{activeRoute.fromRoom}</span>
                   </div>
 
-                  {/* Step carousel / pager navigation bar */}
-                  <div className="flex items-center justify-between rounded-2xl border border-[#e5dfeb] bg-white p-2.5 shadow-xs">
-                    <button
-                      type="button"
-                      onClick={goToPrevStep}
-                      disabled={activeLegIndex === 0}
-                      aria-label="Previous step"
-                      className="flex items-center gap-1.5 rounded-xl bg-[#f1edf4] px-3 py-1.5 text-xs font-semibold text-[#5b238a] transition hover:bg-[#e8dfee] disabled:pointer-events-none disabled:opacity-30"
-                    >
-                      <span>←</span> Prev
-                    </button>
-                    <div className="text-center">
-                      <p className="text-xs font-bold text-[#2f3137]">
-                        Step {(activeLegIndex ?? 0) + 1} of {activeRoute.legs.length}
-                      </p>
-                      <p className="text-[10px] font-medium text-[#747780]">
-                        {BUILDINGS.find((b) => b.id === activeRoute.legs[activeLegIndex ?? 0]?.building)?.name ?? activeRoute.legs[activeLegIndex ?? 0]?.building} · Level {activeRoute.legs[activeLegIndex ?? 0]?.level === 0 ? "Concourse" : activeRoute.legs[activeLegIndex ?? 0]?.level}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={goToNextStep}
-                      disabled={activeLegIndex === activeRoute.legs.length - 1}
-                      aria-label="Next step"
-                      className="flex items-center gap-1.5 rounded-xl bg-[#5b238a] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#4b1d72] disabled:pointer-events-none disabled:opacity-30"
-                    >
-                      Next <span>→</span>
-                    </button>
-                  </div>
-
-                  {/* Leg by leg guidance */}
-                  <div className="flex flex-col gap-2">
-                    <div className="flex items-center justify-between px-1">
-                      <h3 className="text-xs font-semibold text-[#747780] uppercase tracking-wider">
-                        Turn-by-turn ({activeRoute.legs.length} {activeRoute.legs.length === 1 ? "leg" : "legs"})
-                      </h3>
-                      <span className="text-[11px] text-[#92959d]">Click any step to view</span>
-                    </div>
-
-                    {activeRoute.legs.map((leg, index) => {
-                      const isActive = activeLegIndex === index;
-                      const transitionAfter = activeRoute.transitions[index];
-                      const bName =
-                        BUILDINGS.find((b) => b.id === leg.building)?.name ?? `${leg.building} Building`;
-                      const instruction = getLegInstruction(
-                        leg,
-                        index,
-                        activeRoute.legs.length,
-                        activeRoute.fromRoom,
-                        activeRoute.toRoom
-                      );
+                  {/* Step list */}
+                  <ol className="flex flex-col gap-1 overflow-y-auto" style={{ maxHeight: "calc(40dvh - 2rem)" }}>
+                    {directionSteps.map((step, si) => {
+                      const isCurrent = step.legIndex === activeLegIndex;
+                      const isHighlighted = step.isTransition;
 
                       return (
-                        <div key={`leg-${index}`} className="flex flex-col">
+                        <li key={si}>
                           <button
+                            ref={isCurrent && !step.isTransition ? activeStepRef : undefined}
                             type="button"
-                            onClick={() => selectLeg(index)}
-                            aria-current={isActive ? "step" : undefined}
-                            className={`flex flex-col rounded-2xl border p-3.5 text-left transition focus-visible:outline-2 focus-visible:outline-[#5b238a] ${
-                              isActive
-                                ? "border-[#5b238a] bg-[#faf8fc] ring-1 ring-[#5b238a] shadow-sm"
-                                : "border-[#e5e7eb] bg-white hover:border-[#c8c9cf] hover:bg-[#fafafa]"
+                            onClick={() => selectLeg(step.legIndex)}
+                            aria-current={isCurrent ? "step" : undefined}
+                            className={`flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition-colors ${
+                              isHighlighted
+                                ? "bg-[#f9cc45] text-[#30291a]"
+                                : isCurrent
+                                  ? "bg-[#f1edf4] text-[#2f3137] ring-1 ring-[#5b238a]/20"
+                                  : "bg-white/40 text-[#555861] hover:bg-white/70"
                             }`}
                           >
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2">
-                                <span
-                                  className={`flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold ${
-                                    isActive
-                                      ? "bg-[#5b238a] text-white"
-                                      : "bg-[#f1edf4] text-[#5b238a]"
-                                  }`}
-                                >
-                                  {index + 1}
-                                </span>
-                                <p className="text-xs font-semibold text-[#5b238a]">
-                                  {bName} · {leg.level === 0 ? "Concourse" : `Level ${leg.level}`}
-                                </p>
-                              </div>
-                              <span className="text-xs font-medium text-[#747780]">
-                                {Math.round(leg.distanceMeters)} m
-                              </span>
+                            <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-sm" aria-hidden="true">
+                              {step.icon}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <span className="block text-sm font-medium leading-5">{step.text}</span>
+                              {step.subtext ? (
+                                <span className={`mt-0.5 block text-xs ${isHighlighted ? "text-[#5e4a1a]" : "text-[#92959d]"}`}>{step.subtext}</span>
+                              ) : null}
                             </div>
-                            <p className="mt-1.5 text-xs leading-5 text-[#2f3137]">
-                              {instruction}
-                            </p>
-                            {isActive ? (
-                              <span className="mt-2 inline-flex w-fit items-center gap-1 rounded-full bg-[#5b238a]/10 px-2 py-0.5 text-[10px] font-bold text-[#5b238a]">
-                                <span className="h-1.5 w-1.5 rounded-full bg-[#5b238a] animate-pulse" />
-                                Active leg on map
-                              </span>
-                            ) : null}
                           </button>
-
-                          {/* Transition cue to next leg */}
-                          {transitionAfter ? (
-                            <div
-                              onClick={() => selectLeg(index + 1)}
-                              role="button"
-                              tabIndex={0}
-                              className="my-1.5 flex cursor-pointer items-center gap-2.5 rounded-xl border border-dashed border-[#d8d3e2] bg-[#fcfbfe] px-3 py-2 text-xs transition hover:bg-[#f5f0fa]"
-                            >
-                              <span className="text-base leading-none">
-                                {transitionAfter.type === "bridge"
-                                  ? "🌁"
-                                  : transitionAfter.type === "elevator"
-                                  ? "🛗"
-                                  : transitionAfter.type === "stairs"
-                                  ? "🪜"
-                                  : "🚪"}
-                              </span>
-                              <div className="flex-1">
-                                <p className="font-semibold text-[#4b1d72]">{transitionAfter.description}</p>
-                                <p className="text-[10px] text-[#747780]">
-                                  {transitionAfter.type === "bridge"
-                                    ? "Level 3 Skybridge walkway"
-                                    : transitionAfter.type === "elevator"
-                                    ? "Elevator vertical transit"
-                                    : "Stairway vertical transit"}
-                                </p>
-                              </div>
-                              <span className="text-[10px] font-semibold text-[#5b238a]">View next →</span>
-                            </div>
-                          ) : null}
-                        </div>
+                        </li>
                       );
                     })}
+                  </ol>
+
+                  {/* Destination section header */}
+                  <div className="flex items-center gap-2 px-1">
+                    <span className="inline-block h-2 w-2 rounded-full bg-[#f59e0b]" />
+                    <span className="text-sm font-bold text-[#2f3137]">{activeRoute.toRoom}</span>
                   </div>
-                </div>
+
+                  {/* Navigation buttons */}
+                  <div className="sticky bottom-0 flex gap-3 rounded-xl bg-white/90 p-2">
+                    <button type="button" onClick={goToPrevStep} disabled={activeLegIndex === 0} className="flex-1 rounded-xl border border-[#dedfe3] px-3 py-2.5 text-sm font-semibold text-[#555861] disabled:opacity-35">←</button>
+                    {activeLegIndex === activeRoute.legs.length - 1 ? (
+                      <button type="button" onClick={() => { clearRoute(); setTab("explore"); }} className="flex-1 rounded-xl bg-[#5b238a] px-3 py-2.5 text-sm font-semibold text-white">Finish</button>
+                    ) : (
+                      <button type="button" onClick={goToNextStep} className="flex-1 rounded-xl bg-[#5b238a] px-3 py-2.5 text-sm font-semibold text-white">→</button>
+                    )}
+                  </div>
+                </section>
               ) : null}
             </div>
           )}

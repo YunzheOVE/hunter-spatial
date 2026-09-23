@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import zipfile
+from collections import defaultdict
 from pathlib import Path
 
 from convert_to_geojson import (
@@ -13,12 +14,34 @@ from convert_to_geojson import (
     _feature_name,
     _group_buildings,
     canonical_room_id,
+    format_facility_room,
     load_spaces,
     parse_level,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT_PATH = ROOT / "apps" / "web" / "public" / "data" / "routing-graph.json"
+
+PUBLIC_ROOM_KEYWORDS = (
+    "lobby",
+    "entrance",
+    "bridge",
+    "skybridge",
+    "gallery",
+    "concourse",
+    "atrium",
+    "plaza",
+    "patio",
+    "cafeteria",
+    "dining",
+    "student center",
+    "l01",
+    "yummy",
+    "washroom",
+    "restroom",
+    "toilet",
+    "bathroom",
+)
 
 
 def haversine_meters(coord1: list[float] | tuple[float, float], coord2: list[float] | tuple[float, float]) -> float:
@@ -64,6 +87,9 @@ def build_routing_graph(
 
         raw_map_id = str(props.get("map") or "").removeprefix("f_")
         map_info = map_lookup.get(raw_map_id, {"level": 1, "building": ""})
+        if not map_info["building"]:
+            continue  # Exclude outdoor grounds nodes; Hunter routing is strictly interior
+
         coords = geom.get("coordinates") or [0.0, 0.0]
 
         nodes[node_id] = {
@@ -158,12 +184,30 @@ def build_routing_graph(
                 }
             )
 
-    # 4. Map canonical rooms to entrance nodes
+    # 4. Map canonical rooms to entrance nodes and identify restricted private rooms
     rooms: dict[str, dict] = {}
+    restricted_room_nodes: set[str] = set()
+
     for mapped_map in maps:
         map_id = mapped_map["id"]
         map_info = map_lookup.get(map_id, {"level": 1, "building": ""})
         spaces = spaces_by_map.get(map_id, [])
+
+        # Count washrooms on this floor exactly matching convert_to_geojson
+        washroom_totals: dict[str, int] = defaultdict(int)
+        for space in spaces:
+            fn = _feature_name(space).lower()
+            if any(w in fn for w in ("washroom", "restroom", "toilet", "bathroom")):
+                if "women" in fn or "female" in fn:
+                    washroom_totals["WOMEN"] += 1
+                elif "men" in fn or "male" in fn:
+                    washroom_totals["MEN"] += 1
+                elif "all gender" in fn or "gender neutral" in fn:
+                    washroom_totals["ALLGENDER"] += 1
+                else:
+                    washroom_totals["RESTROOM"] += 1
+
+        washroom_indices: dict[str, int] = defaultdict(int)
 
         for space in spaces:
             name = _feature_name(space)
@@ -175,19 +219,49 @@ def build_routing_graph(
             if not valid_nodes:
                 continue
 
-            room_id = canonical_room_id(name, str((space.get("properties") or {}).get("externalId") or ""))
+            n_lower = name.lower()
+            is_washroom = any(w in n_lower for w in ("washroom", "restroom", "toilet", "bathroom"))
+            if is_washroom:
+                if "women" in n_lower or "female" in n_lower:
+                    w_type = "WOMEN"
+                elif "men" in n_lower or "male" in n_lower:
+                    w_type = "MEN"
+                elif "all gender" in n_lower or "gender neutral" in n_lower:
+                    w_type = "ALLGENDER"
+                else:
+                    w_type = "RESTROOM"
+                washroom_indices[w_type] += 1
+                room_id, display_name = format_facility_room(
+                    name,
+                    str((space.get("properties") or {}).get("externalId") or ""),
+                    building=map_info["building"],
+                    level=map_info["level"],
+                    type_idx=washroom_indices[w_type],
+                    type_total=washroom_totals[w_type],
+                )
+                room_name = display_name
+            else:
+                room_id = canonical_room_id(name, str((space.get("properties") or {}).get("externalId") or ""))
+                room_name = name
+
+            node_id = valid_nodes[0]
             if room_id not in rooms:
                 rooms[room_id] = {
                     "building": map_info["building"],
                     "level": map_info["level"],
-                    "nodeId": valid_nodes[0],
-                    "name": name,
+                    "nodeId": node_id,
+                    "name": room_name,
                 }
+
+            lower_name = f"{room_name} {room_id}".lower()
+            if not any(k in lower_name for k in PUBLIC_ROOM_KEYWORDS):
+                restricted_room_nodes.add(node_id)
 
     return {
         "nodes": nodes,
         "edges": edges,
         "rooms": rooms,
+        "restrictedRoomNodes": sorted(restricted_room_nodes),
     }
 
 

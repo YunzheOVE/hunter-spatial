@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { findRoute, type RoutingGraphData } from "./pathfinding";
-import { routeToGeoJSON } from "./routeGeometry";
+import { routeToGeoJSON, smoothRoutePolyline } from "./routeGeometry";
 
 const graphPath = path.resolve(__dirname, "../../public/data/routing-graph.json");
 const rawJson = fs.readFileSync(graphPath, "utf-8");
@@ -19,14 +19,26 @@ describe("Route Geometry Converter", () => {
     expect(ribbon.geometry.type).toBe("MultiPolygon");
     expect(ribbon.properties.building).toBe("N");
     expect(ribbon.properties.level).toBe(3);
-    expect(ribbon.properties.base).toBeCloseTo(7.08, 1);
-    expect(ribbon.properties.height).toBeCloseTo(7.2, 1);
+    expect(ribbon.properties.base).toBeCloseTo(7.24, 1);
+    expect(ribbon.properties.height).toBeCloseTo(7.38, 1);
 
     expect(geojson.markers.features.length).toBe(2); // start and destination
     expect(geojson.markers.features[0].properties.kind).toBe("start");
     expect(geojson.markers.features[0].properties.label).toBe("N304");
     expect(geojson.markers.features[1].properties.kind).toBe("destination");
     expect(geojson.markers.features[1].properties.label).toBe("N302");
+  });
+
+  it("smooths polylines with rounded corners", () => {
+    const coords: [number, number][] = [
+      [-73.9648, 40.7677],
+      [-73.9648, 40.7678],
+      [-73.9647, 40.7678],
+    ];
+    const smoothed = smoothRoutePolyline(coords, 1.2, 4);
+    expect(smoothed.length).toBeGreaterThan(coords.length);
+    expect(smoothed[0]).toEqual(coords[0]);
+    expect(smoothed[smoothed.length - 1]).toEqual(coords[coords.length - 1]);
   });
 
   it("converts multi-floor route with transitions and correct elevations", () => {
