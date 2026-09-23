@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { RoomCard } from "./RoomCard";
 import { LevelControl } from "./LevelControl";
+import { WayfindingIcon, type WayfindingIconName } from "./WayfindingIcon";
 import { ROOM_MEDIA } from "@/lib/roomMedia";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -178,11 +179,10 @@ export function CampusApp() {
   // ── Turn-by-turn instruction helpers ──────────────────────────────
 
   type DirectionStep = {
-    icon: string;
+    icon: WayfindingIconName;
     text: string;
     subtext?: string;
     isTransition: boolean;
-    transitionType?: "elevator" | "stairs" | "bridge" | "escalator" | "connector";
     legIndex: number;
   };
 
@@ -197,7 +197,7 @@ export function CampusApp() {
 
       if (i === 0) {
         steps.push({
-          icon: "🚶",
+          icon: "walk",
           text: `Leave ${fromRoom} and head out`,
           subtext: `${bName} · ${levelText}`,
           isTransition: false,
@@ -215,7 +215,7 @@ export function CampusApp() {
 
           if (i === legs.length - 1) {
             steps.push({
-              icon: "➡️",
+              icon: "forward",
               text: `${exitVerb} and head to ${toRoom}`,
               subtext: `${bName} · ${levelText}`,
               isTransition: false,
@@ -223,7 +223,7 @@ export function CampusApp() {
             });
           } else {
             steps.push({
-              icon: "➡️",
+              icon: "forward",
               text: `${exitVerb} and continue along ${levelText}`,
               subtext: bName,
               isTransition: false,
@@ -236,18 +236,11 @@ export function CampusApp() {
       // If there is a transition after this leg, add the transition step
       if (transitions[i]) {
         const t = transitions[i];
-        let icon = "🔀";
-        if (t.type === "elevator") icon = "🛗";
-        else if (t.type === "stairs") icon = "🪜";
-        else if (t.type === "bridge") icon = "🌉";
-        else if (t.type === "escalator") icon = "↗️";
-
         steps.push({
-          icon,
+          icon: t.type,
           text: t.description,
           subtext: `Less than a minute`,
           isTransition: true,
-          transitionType: t.type,
           legIndex: i,
         });
       }
@@ -255,7 +248,7 @@ export function CampusApp() {
 
     // Final arrive step
     steps.push({
-      icon: "📍",
+      icon: "destination",
       text: `Arrive at ${toRoom}`,
       subtext: undefined,
       isTransition: false,
@@ -511,7 +504,7 @@ export function CampusApp() {
                       <div key={ti} className="flex flex-1 items-center">
                         <div className={`h-0.5 flex-1 rounded ${activeLegIndex != null && activeLegIndex > ti ? "bg-[#5b238a]" : "bg-[#d4d0da]"}`} />
                         <span className={`mx-0.5 flex h-5 w-5 items-center justify-center rounded-full text-[10px] ${activeLegIndex != null && activeLegIndex === ti ? "bg-[#f9cc45] ring-2 ring-[#f59e0b]" : "bg-[#f1edf4]"}`} title={t.description}>
-                          {t.type === "elevator" ? "🛗" : t.type === "stairs" ? "🪜" : t.type === "bridge" ? "🌉" : "↗️"}
+                          <WayfindingIcon name={t.type} size={13} />
                         </span>
                         <div className={`h-0.5 flex-1 rounded ${activeLegIndex != null && activeLegIndex > ti ? "bg-[#5b238a]" : "bg-[#d4d0da]"}`} />
                       </div>
@@ -865,7 +858,7 @@ export function CampusApp() {
                             }`}
                           >
                             <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-sm" aria-hidden="true">
-                              {step.icon}
+                              <WayfindingIcon name={step.icon} size={19} />
                             </span>
                             <div className="min-w-0 flex-1">
                               <span className="block text-sm font-medium leading-5">{step.text}</span>

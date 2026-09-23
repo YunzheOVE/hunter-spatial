@@ -449,6 +449,19 @@ function registerCustomBadges(map: MapLibreMap) {
   }
 }
 
+async function registerRouteMarkerIcons(map: MapLibreMap) {
+  for (const [id, url] of [
+    ["route-start", "/icons/route-start.svg"],
+    ["route-destination", "/icons/route-destination.svg"],
+  ] as const) {
+    if (map.hasImage(id)) continue;
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    map.addImage(id, image, { pixelRatio: 2 });
+  }
+}
+
 function roomColor(selectedRoom: string | null): ExpressionSpecification {
   return [
     "case",
@@ -612,6 +625,8 @@ export function MapView({
       try {
         hideBasemapExtrusions(map);
         registerCustomBadges(map);
+        await registerRouteMarkerIcons(map);
+        if (cancelled) return;
         const response = await fetch("/data/hunter-floors.geojson?v=10");
         if (!response.ok) throw new Error(`Could not load floor data (${response.status})`);
         const data = await response.json();
@@ -734,7 +749,7 @@ export function MapView({
         });
         map.addSource("campus-markers", {
           type: "geojson",
-          data: "/data/campus-markers.geojson?v=10",
+          data: "/data/campus-markers.geojson?v=11",
         });
         map.addLayer({
           id: "campus-room-labels",
@@ -807,17 +822,21 @@ export function MapView({
           source: "route-markers",
           layout: {
             "symbol-placement": "point",
+            "icon-image": ["match", ["get", "kind"], "start", "route-start", "route-destination"],
+            "icon-size": 0.8,
+            "icon-allow-overlap": true,
+            "icon-ignore-placement": true,
             "text-field": [
               "case",
               ["==", ["get", "kind"], "start"],
-              ["concat", "🟢 Start: ", ["get", "label"]],
+              ["concat", "Start: ", ["get", "label"]],
               ["==", ["get", "kind"], "destination"],
-              ["concat", "🏁 End: ", ["get", "label"]],
+              ["concat", "End: ", ["get", "label"]],
               ["get", "label"]
             ],
             "text-size": 12,
-            "text-anchor": "bottom",
-            "text-offset": [0, -0.6],
+            "text-anchor": "left",
+            "text-offset": [1.25, 0],
             "text-allow-overlap": true,
             "text-ignore-placement": true,
             "symbol-height-anchor": "absolute",

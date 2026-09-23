@@ -54,56 +54,42 @@ def categorize_room(name: str, room_id: str) -> dict:
             "category": "restroom_women",
             "iconBadge": "badge-restroom-women",
             "displayCode": "",
-            "icon": "🚺",
-            "label": f"🚺 Women's ({room_id})" if room_id else "🚺 Women's",
         }
     if "men's washroom" in n_lower or "male" in n_lower or "men" in n_lower:
         return {
             "category": "restroom_men",
             "iconBadge": "badge-restroom-men",
             "displayCode": "",
-            "icon": "🚹",
-            "label": f"🚹 Men's ({room_id})" if room_id else "🚹 Men's",
         }
     if "washroom" in n_lower or "restroom" in n_lower or "toilet" in n_lower:
         return {
             "category": "restroom",
             "iconBadge": "badge-restroom",
             "displayCode": "",
-            "icon": "🚻",
-            "label": f"🚻 Restroom ({room_id})" if room_id else "🚻 Restroom",
         }
     if "stair" in n_lower:
         return {
             "category": "stairs",
             "iconBadge": "badge-stairs",
             "displayCode": "",
-            "icon": "🪜",
-            "label": f"🪜 {name}",
         }
     if "elevator" in n_lower:
         return {
             "category": "elevator",
             "iconBadge": "badge-elevator",
             "displayCode": "",
-            "icon": "🛗",
-            "label": f"🛗 {name}",
         }
     if "escalator" in n_lower:
         return {
             "category": "escalator",
             "iconBadge": "badge-stairs",
             "displayCode": "",
-            "icon": "⚡",
-            "label": f"⚡ {name}",
         }
     if "library" in n_lower:
         return {
             "category": "library",
             "iconBadge": "badge-study",
             "displayCode": name if len(name) <= 16 else "Library",
-            "icon": "📖",
-            "label": f"📖 {name}",
         }
     if "study" in n_lower or "lounge" in n_lower or "veteran" in n_lower or "services" in n_lower:
         short = name if len(name) <= 24 else name[:22] + "…"
@@ -111,8 +97,6 @@ def categorize_room(name: str, room_id: str) -> dict:
             "category": "study",
             "iconBadge": "badge-study",
             "displayCode": short,
-            "icon": "📚",
-            "label": f"📚 {name}",
         }
     if "cafeteria" in n_lower or "cafe" in n_lower or "dining" in n_lower or "food" in n_lower:
         short = name if len(name) <= 18 else name[:16] + "…"
@@ -120,8 +104,6 @@ def categorize_room(name: str, room_id: str) -> dict:
             "category": "food",
             "iconBadge": "badge-food",
             "displayCode": short,
-            "icon": "☕",
-            "label": f"☕ {name}",
         }
     if "theatre" in n_lower or "theater" in n_lower or "auditorium" in n_lower or "lecture" in n_lower:
         short = name if len(name) <= 20 else name[:18] + "…"
@@ -129,8 +111,6 @@ def categorize_room(name: str, room_id: str) -> dict:
             "category": "lecture",
             "iconBadge": "badge-lecture",
             "displayCode": short,
-            "icon": "🎭",
-            "label": f"🎭 {name}",
         }
     if "office" in n_lower or "admissions" in n_lower or "center" in n_lower or "help desk" in n_lower:
         clean_code = room_id if room_id and any(c.isdigit() for c in room_id) else (name if len(name) <= 18 else name[:16] + "…")
@@ -138,8 +118,6 @@ def categorize_room(name: str, room_id: str) -> dict:
             "category": "office",
             "iconBadge": "badge-office",
             "displayCode": clean_code,
-            "icon": "🏢",
-            "label": f"🏢 {clean_code}",
         }
     if "lab" in n_lower:
         clean_code = room_id if room_id and any(c.isdigit() for c in room_id) else (name if len(name) <= 18 else name[:16] + "…")
@@ -147,8 +125,6 @@ def categorize_room(name: str, room_id: str) -> dict:
             "category": "lab",
             "iconBadge": "badge-classroom",
             "displayCode": clean_code,
-            "icon": "🔬",
-            "label": f"🔬 {clean_code}",
         }
 
     # Standard classroom or room identifier (e.g. W305, 11007, HN-304, N121A)
@@ -157,8 +133,6 @@ def categorize_room(name: str, room_id: str) -> dict:
         "category": "classroom",
         "iconBadge": "badge-classroom",
         "displayCode": clean_code,
-        "icon": "🎓",
-        "label": f"🎓 {clean_code}",
     }
 
 
@@ -219,8 +193,6 @@ def build_markers() -> dict:
                     "category": cat_meta["category"],
                     "iconBadge": cat_meta["iconBadge"],
                     "displayCode": cat_meta["displayCode"],
-                    "icon": cat_meta["icon"],
-                    "label": cat_meta["label"],
                     "name": name,
                     "roomId": room_id,
                     "building": building,
@@ -257,9 +229,7 @@ def build_markers() -> dict:
             raw_name = (c.get("details") or {}).get("name") or c.get("name") or c_type
             clean_name = raw_name.replace("Building", "").strip()
 
-            icon = "🪜" if c_type == "stairs" else "🛗" if c_type == "elevator" else "⚡"
             icon_badge = "badge-stairs" if c_type in {"stairs", "escalator"} else "badge-elevator"
-            label_prefix = icon
 
             for n_id in c.get("nodes", []):
                 if n_id not in nodes:
@@ -285,8 +255,6 @@ def build_markers() -> dict:
                             "category": c_type,
                             "iconBadge": icon_badge,
                             "displayCode": "",
-                            "icon": icon,
-                            "label": f"{label_prefix} {clean_name}",
                             "name": clean_name,
                             "roomId": clean_name,
                             "building": building,
