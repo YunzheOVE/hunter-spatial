@@ -2,6 +2,8 @@
 
 import dynamic from "next/dynamic";
 import { RoomCard } from "./RoomCard";
+import { PanoramaModal } from "./PanoramaModal";
+import { UploadPanel } from "./UploadPanel";
 import { LevelControl } from "./LevelControl";
 import { WayfindingIcon, type WayfindingIconName } from "./WayfindingIcon";
 import { ROOM_MEDIA } from "@/lib/roomMedia";
@@ -32,11 +34,12 @@ const BUILDINGS = [
 ] as const;
 
 export function CampusApp() {
-  const [tab, setTab] = useState<"explore" | "directions">("explore");
+  const [tab, setTab] = useState<"explore" | "directions" | "upload">("explore");
   const [buildingId, setBuildingId] = useState<CampusBuildingId | null>(null);
   const [floor, setFloor] = useState<number | null>(null);
   const [query, setQuery] = useState("");
   const [selectedRoom, setSelectedRoom] = useState<string | null>(null);
+  const [panoramaRoom, setPanoramaRoom] = useState<{ id: string; title: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
 
@@ -58,6 +61,7 @@ export function CampusApp() {
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeError, setRouteError] = useState<string | null>(null);
   const [routingGraph, setRoutingGraph] = useState<RoutingGraphData | null>(null);
+  const [locationsError, setLocationsError] = useState(false);
 
   type RoomSuggestion = {
     id: string;
@@ -70,7 +74,7 @@ export function CampusApp() {
   useEffect(() => {
     fetchRoutingGraph()
       .then((data) => setRoutingGraph(data))
-      .catch((err) => console.warn("Failed to prefetch routing graph:", err));
+      .catch((err) => { setLocationsError(true); console.warn("Failed to prefetch routing graph:", err); });
   }, []);
 
   const roomKeys = useMemo(
@@ -477,14 +481,16 @@ export function CampusApp() {
         </div>
       </main>
 
-      {selectedRoom && tab === "explore" ? <RoomCard key={selectedRoom} id={selectedRoom} name={selectedInfo?.name ?? selectedRoom} building={BUILDINGS.find((b) => b.id === (selectedInfo?.building ?? buildingId))?.name ?? "Campus"} level={selectedInfo?.level ?? floor ?? 1} media={ROOM_MEDIA[selectedDetails?.roomId ?? selectedRoom]} onClose={() => { setSelectedRoom(null); setQuery(""); }} onDirections={() => startDirectionsTo(selectedRoom)} onFrom={() => startDirectionsFrom(selectedRoom)} /> : null}
+      {selectedRoom && tab === "explore" ? <RoomCard key={selectedRoom} id={selectedRoom} name={selectedInfo?.name ?? selectedRoom} building={BUILDINGS.find((b) => b.id === (selectedInfo?.building ?? buildingId))?.name ?? "Campus"} level={selectedInfo?.level ?? floor ?? 1} media={ROOM_MEDIA[selectedDetails?.roomId ?? selectedRoom]} onClose={() => { setSelectedRoom(null); setQuery(""); }} onDirections={() => startDirectionsTo(selectedRoom)} onFrom={() => startDirectionsFrom(selectedRoom)} onPanorama={() => setPanoramaRoom({ id: selectedDetails?.roomId ?? selectedRoom, title: selectedInfo?.name ?? selectedRoom })} onUpload={() => { setTab("upload"); setActiveRoute(null); setActiveLegIndex(null); }} /> : null}
 
-      <LevelControl levels={campusLevels} floor={floor} onSelect={selectFloor} />
+      {panoramaRoom ? <PanoramaModal key={panoramaRoom.id} locationId={panoramaRoom.id} title={panoramaRoom.title} onClose={() => setPanoramaRoom(null)} /> : null}
+
+      {tab !== "upload" ? <LevelControl levels={campusLevels} floor={floor} onSelect={selectFloor} /> : null}
 
       {panelOpen ? (
         <aside
           id="map-controls"
-          style={selectedRoom && tab === "explore" ? { maxHeight: "calc(60dvh - 5rem)" } : undefined}
+          style={tab === "upload" ? { maxHeight: "calc(100dvh - 2.5rem)" } : selectedRoom && tab === "explore" ? { maxHeight: "calc(60dvh - 5rem)" } : undefined}
           className="[&>*]:shrink-0 absolute top-3 right-20 left-3 z-20 flex max-h-[60dvh] flex-col overflow-y-auto rounded-[26px] border border-white/65 bg-white/60 p-4 shadow-[0_18px_55px_rgba(39,38,44,0.17)] backdrop-blur-[3px] md:top-5 md:right-auto md:left-5 md:max-h-[calc(100dvh-2.5rem)] md:w-[340px]"
         >
           {navigating ? (
@@ -568,11 +574,12 @@ export function CampusApp() {
             >
               Directions {activeRoute ? "•" : ""}
             </button>
+            <button type="button" onClick={() => { setTab("upload"); setActiveRoute(null); setActiveLegIndex(null); }} aria-pressed={tab === "upload"} className={`flex-1 rounded-lg py-1.5 transition focus-visible:outline-2 focus-visible:outline-[#5b238a] ${tab === "upload" ? "bg-white text-[#4b1d72] shadow-sm" : "text-[#6c5580] hover:text-[#4b1d72]"}`}>Upload</button>
           </div>
 
           </>}
 
-          {tab === "explore" ? (
+          {tab === "upload" ? <UploadPanel graph={routingGraph} initialLocationId={selectedDetails?.roomId ?? selectedRoom} locationsError={locationsError} /> : tab === "explore" ? (
             <>
               <label className="mt-4 block text-sm font-medium text-[#4c4f56]" htmlFor="room-search">
                 Search rooms or places

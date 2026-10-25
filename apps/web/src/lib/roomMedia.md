@@ -1,5 +1,11 @@
 # Room imagery
 
+Approved uploaded panoramas now have a separate runtime path: room details open
+the Pannellum modal, which fetches metadata from `/api/panoramas?locationId=...`
+and image bytes from the backend. See the root `database/README.md` for setup.
+The static catalog below remains for legacy photo/tour entries; runtime badges
+and the panorama filter will be connected in the final integration phase.
+
 Add verified campus imagery to `ROOM_MEDIA` in `roomMedia.ts`, keyed by the
 canonical room ID from the routing graph. The catalog starts empty because this
 repository does not contain room photos or interactive tours.

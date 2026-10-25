@@ -16,7 +16,13 @@ This document provides a comprehensive, structured reference of all technologies
 
 ### Node.js
 * **What it is:** A local runtime environment that executes JavaScript outside of the browser.
-* **What it does in the project:** Used strictly during development as the build and tooling environment (installing packages via `npm`, running compilers, and running dev servers). It is not a live backend server.
+* **What it does in the project:** Runs build tooling and the Next.js backend. Node.js 22.13+ provides built-in SQLite for panorama metadata; backend routes serve approved image files from local storage. Map geometry and routing remain static/client-side.
+
+### Panorama storage and viewer
+* **SQLite:** Stores users and panorama submissions, including location ID, image path, coverage settings, status, and review time. Image bytes are separate files under gitignored `local-data/uploads/`.
+* **Pannellum:** Displays full or partial equirectangular images in a closable modal. The modal retrieves the latest approved panorama at runtime; it does not reset map state.
+* **Accounts and submissions:** Simple sign-up/sign-in/sign-out with salted scrypt hashes and SQLite-backed cookie sessions (no JWT). User uploads retain their original bytes and start pending; unpublished images require the uploader or reviewer session.
+* **Current progression:** Viewer, storage, accounts, and submissions are implemented. Review UI and runtime map badges/filtering are subsequent phases. See [database/README.md](database/README.md).
 
 ### TypeScript 5
 * **What it is:** A statically typed superset of JavaScript.

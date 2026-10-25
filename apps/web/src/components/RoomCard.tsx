@@ -3,7 +3,7 @@
 import { useRef } from "react";
 import type { RoomMedia } from "@/lib/roomMedia";
 
-export function RoomCard({ id, name, building, level, media, onDirections, onFrom, onClose }: {
+export function RoomCard({ id, name, building, level, media, onDirections, onFrom, onClose, onPanorama, onUpload }: {
   id: string;
   name: string;
   building: string;
@@ -12,6 +12,8 @@ export function RoomCard({ id, name, building, level, media, onDirections, onFro
   onDirections: () => void;
   onFrom: () => void;
   onClose: () => void;
+  onPanorama?: () => void;
+  onUpload?: () => void;
 }) {
   const photoDialog = useRef<HTMLDialogElement>(null);
   const preview = media?.panorama?.preview ?? media?.photo?.src;
@@ -40,8 +42,9 @@ export function RoomCard({ id, name, building, level, media, onDirections, onFro
         <p className="mt-1 text-xs text-[#555861]">{building} · {level === 0 ? "Concourse" : `Level ${level}`}</p>
       </div>
       <button type="button" onClick={onDirections} className="mt-3 w-full rounded-xl bg-[#5b238a] px-3 py-2 text-sm font-semibold text-white hover:bg-[#4b1d72]">Directions</button>
-      {media?.panorama ? <a className="mt-2 block rounded-xl border border-[#5b238a]/40 px-3 py-2 text-center text-sm font-semibold text-[#5b238a]" href={media.panorama.viewerUrl} target="_blank" rel="noreferrer">View in 360° <span className="sr-only">(opens in a new tab)</span></a> : null}
+      {onPanorama ? <button type="button" onClick={onPanorama} className="mt-2 block w-full rounded-xl border border-[#5b238a]/40 px-3 py-2 text-center text-sm font-semibold text-[#5b238a]">View in 360°</button> : media?.panorama ? <a className="mt-2 block rounded-xl border border-[#5b238a]/40 px-3 py-2 text-center text-sm font-semibold text-[#5b238a]" href={media.panorama.viewerUrl} target="_blank" rel="noreferrer">View in 360° <span className="sr-only">(opens in a new tab)</span></a> : null}
       {media?.nearbyHallway ? <a className="mt-2 block text-sm font-medium text-[#5b238a] underline" href={media.nearbyHallway.viewerUrl} target="_blank" rel="noreferrer">View nearby hallway · {media.nearbyHallway.name}<span className="sr-only"> (opens in a new tab)</span></a> : null}
+      {onUpload ? <button type="button" onClick={onUpload} className="mt-2 block text-sm font-semibold text-[#5b238a] underline">Upload panorama</button> : null}
       <button type="button" onClick={onFrom} className="mt-2 text-xs font-medium text-[#5b238a] underline underline-offset-2">Use as starting point</button>
       </div>
       </div>

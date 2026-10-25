@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "npm run dev -w web",
     "build": "npm run build -w web",
-    "test": "npm run test -w web"
+    "test": "npm run test -w web",
+    "db:init": "npm run db:init -w web",
+    "db:seed": "npm run db:seed -w web"
   }
 }
