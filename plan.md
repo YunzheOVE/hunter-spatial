@@ -17,7 +17,8 @@ The renderer is **open source**. The indoor geometry is **not**.
 | Piece | What we use | Notes |
 |--------|-------------|--------|
 | **Map** | MapLibre GL JS `fill-extrusion` on vector GeoJSON | Open source |
-| **Look** | Pannellum 360° photospheres (`.webp`) | Viewer is OSS; photos are ours |
+| **Look** | Pannellum modal with runtime panorama metadata | User submissions and reviewer approval; development fixture available |
+| **Panorama storage** | Next.js Node routes + SQLite + local image files | Map geometry stays static; images are served at runtime |
 | **Pathfinding** | `ngraph.path` (A*) on an extracted walkable graph | We copy the graph, not Mappedin’s JavaScript |
 | **Schedule** | Client-side `.ics` parse + existing `parseRoomId` | No CUNYFirst login |
 | **Assistant (later)** | FastAPI + Chroma RAG | Returns a room id the map already knows |
@@ -31,7 +32,7 @@ Keep the Next.js app shell ([`apps/web/src/components/CampusApp.tsx`](apps/web/s
 | Layer | What it is | How it is implemented |
 |--------|------------|------------------------|
 | **Map** | Building perimeters, floors, walls, hallways, room polygons, path lines | Extracted GeoJSON rendered with MapLibre (`fill-extrusion`) |
-| **Look** | Photorealistic interiors at a few hubs (Library, Cafeteria, Skybridge) | Our 360° equirectangular photos in a Pannellum modal |
+| **Look** | Approved user-submitted interiors tied to existing location IDs | Image files and coverage settings loaded into a Pannellum modal |
 
 They share a **room code** (`N304`, `HN 304`). Search, schedule, and chat never invent coordinates. They emit a room id. The map highlights that polygon and pathfinds to its **entrance node** (hallway outside the door), not the polygon centroid.
 
@@ -122,9 +123,28 @@ Code is open source. Indoor geometry is a one-time extract from Hunter’s publi
 
 ### Milestone 3: 360° portals and class schedule (current)
 
-1. Embed Pannellum in a modal. Attach `pano_url` on a few landmark features. Clicking those opens the lookaround viewer. Capture our own equirectangular photos (Library, Cafeteria, Skybridge) — Pannellum does not supply imagery.
-2. Drag-and-drop `.ics` upload. Parse `LOCATION` with existing `parseRoomId` (`HN 304` → `N304`). Fly to the room and highlight the polygon. Pathfind to the entrance node.
-3. Do **not** log into CUNYFirst.
+See [Panorama upload system plan](docs/panorama-upload-plan.md) for the detailed
+design, database layout, and five-phase progression of the upload system.
+
+1. **Phase 1 (implemented):** Pannellum modal from room details, full/partial coverage, close button and Escape. Closing preserves map state.
+2. **Phase 2 (implemented):** SQLite `users` and `panoramas` tables, separate local image storage, approved metadata/image endpoints, and explicit N304 development seed. See [database/README.md](database/README.md).
+3. **Phase 3 (implemented):** Simple sign-up, sign-in, sign-out, and user uploads (details below).
+4. **Phase 4:** Reviewer preview and one-time approval/rejection; latest approval becomes the displayed panorama.
+5. **Phase 5:** Runtime approved-image badges/filter, end-to-end polish, and documentation.
+
+Class schedules remain separate future work: parse uploaded `.ics` `LOCATION`
+with `parseRoomId`, highlight the room, and route to its entrance. No CUNYFirst login.
+
+#### Phase 3 — Simple accounts and submissions
+
+- **Accounts:** Name, email, and password sign-up; email/password sign-in; sign-out. Require the exact `@login.cuny.edu` domain for sign-up and sign-in, ignoring capitalization. Every public sign-up is an uploader; permissions come from the stored role. No JWT, SSO, email ownership verification, password reset, or reviewer self-registration in this local MVP.
+- **Precreated reviewer:** `npm run db:seed` creates `reviewer@login.cuny.edu` with initial demo password `ReviewerDemo2026!`, documented in [database/README.md](database/README.md#reviewer-demo-account) and linked from the main README. Reserve that address from sign-up. Create the account if absent; repeated setup preserves its password. Report a conflict if the reserved address belongs to an uploader. Both roles use the same sign-in form; approval controls remain Phase 4. No legacy account conversion or migration support.
+- **Password storage:** One-way salted scrypt hashes using Node's built-in crypto module. Never store plaintext or reversible passwords.
+- **Input limits:** Name required, maximum 50 characters; email required, maximum 100 characters; password 8–100 characters. Enforce on both frontend and backend.
+- **Sessions:** A random opaque session ID in an HTTP-only, SameSite=Lax cookie; its hash, user ID, and 24-hour expiry live in a SQLite `sessions` table. Sign-out deletes the server record and clears the cookie.
+- **Upload tab:** Required searchable location dropdown reusing the existing routing-graph list. Preselect a room when launched from room details. Accept readable, non-animated JPEG/PNG/WebP up to 20 MB and 64 megapixels; preserve original bytes with generated filenames. Support full/partial coverage and a preview modal.
+- **Submission records:** Validate location, image, and coverage on the backend. Use the authenticated user's ID, always start as pending, and remove the saved file if insertion fails. Show My submissions with status and private previews; only the owner and reviewers may access unpublished images.
+- **Checkpoint:** Sign up → select location → preview → submit → see pending status; sign out/in and restart without losing records. Approved-image selection remains unchanged. Reviewer decisions and runtime map badges/filtering remain Phases 4 and 5.
 
 ### Milestone 4: Extended — AI campus concierge
 
@@ -183,5 +203,5 @@ Next.js shell, `parseRoomId` + tests, HAR extract scripts, and an early MapLibre
 
 ## Next concrete step
 
-1. Experimenting different software to capture equirectangular images for 360° portals.
-2. Decide what places in the campus should have 360° views.
+1. Add reviewer preview and one-time approval/rejection decisions in Phase 4.
+2. Connect runtime panorama badges and filtering in Phase 5.

@@ -48,6 +48,24 @@ button:focus-visible, a:focus-visible, select:focus-visible {
   background: rgb(25 20 32 / 65%);
 }
 
+.panorama-dialog {
+  margin: auto;
+  width: min(1100px, 94vw);
+  height: min(760px, 90dvh);
+  max-width: 94vw;
+  max-height: 90dvh;
+  padding: 0;
+  border: 0;
+  border-radius: 16px;
+  background: white;
+  color: var(--ink);
+  overflow: hidden;
+}
+
+.panorama-dialog::backdrop {
+  background: rgb(25 20 32 / 70%);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation: none !important;

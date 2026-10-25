@@ -12,6 +12,14 @@ function render(media?: RoomMedia) {
 }
 
 describe("room content availability", () => {
+  it("offers an in-app panorama button when a modal callback is provided", () => {
+    const html = renderToStaticMarkup(createElement(RoomCard, {
+      id: "N304", name: "N304", building: "North Building", level: 3,
+      onDirections: () => {}, onFrom: () => {}, onClose: () => {}, onPanorama: () => {},
+    }));
+    expect(html).toContain("View in 360°");
+    expect(html).not.toContain('target="_blank"');
+  });
   it("keeps directions and location details without an empty image or tour button", () => {
     const html = render();
     expect(html).toContain("Directions");
