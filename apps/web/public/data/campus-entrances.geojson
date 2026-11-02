@@ -1,0 +1,20 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [-73.9643207, 40.7677242] },
+      "properties": { "id": "entrance-west-68-lex", "name": "Main entrance · Visitors Center", "building": "W", "accessible": true }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [-73.9645188, 40.7687896] },
+      "properties": { "id": "entrance-north-69", "name": "North Building · 69th St", "building": "N", "accessible": true }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [-73.965003, 40.7683426] },
+      "properties": { "id": "entrance-kaye-68", "name": "Kaye Playhouse · 68th St", "building": "N", "accessible": true }
+    }
+  ]
+}

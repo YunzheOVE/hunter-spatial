@@ -392,8 +392,8 @@ export function routeArrows(route: RouteResult | null | undefined, spacingMeters
             x + ((dx * along - dy * side) * meterToDeg) / cosLat,
             y + (dy * along + dx * side) * meterToDeg,
           ];
-          const tip = point(0.4, 0);
-          triangles.push([[tip, point(-0.3, 0.3), point(-0.3, -0.3), tip]]);
+          const tip = point(0.55, 0);
+          triangles.push([[tip, point(-0.35, 0.38), point(-0.35, -0.38), tip]]);
         }
         travelled += length;
       }

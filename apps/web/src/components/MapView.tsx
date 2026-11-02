@@ -12,7 +12,7 @@ import {
   STOREY_HEIGHT,
 } from "@/lib/campusLevels";
 import type { RouteResult } from "@/lib/pathfinding";
-import { routeToGeoJSON } from "@/lib/routeGeometry";
+import { routeArrows, routeToGeoJSON } from "@/lib/routeGeometry";
 
 setWorkerUrl("/maplibre/maplibre-gl-worker.mjs");
 
@@ -275,6 +275,8 @@ const BADGE_ICONS: Record<string, [color: string, icon: string]> = {
   "badge-office": ["#475569", '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>'],
   "badge-food": ["#ea580c", '<path d="M17 8h1a4 4 0 1 1 0 8h-1M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4zM6 2v2M10 2v2M14 2v2"/>'],
   "badge-lounge": ["#b45309", '<path d="M20 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v3M2 16a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5a2 2 0 0 0-4 0v1.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5V11a2 2 0 0 0-4 0zM4 18v2M20 18v2"/>'],
+  "badge-entrance": ["#0f766e", '<path d="M13 4h3a2 2 0 0 1 2 2v14M2 20h3M13 20h9M10 12v.01M13 4.56v16.16a1 1 0 0 1-1.24.97L5 20V5.56a2 2 0 0 1 1.52-1.94l4-1A2 2 0 0 1 13 4.56z"/>'],
+  "badge-entrance-accessible": ["#1d4ed8", '<circle cx="16" cy="4" r="1"/><path d="m18 19 1-7-6 1M5 8l3-3 5.5 3-2.36 3.5M4.24 14.5a5 5 0 0 0 6.88 6M13.76 17.5a5 5 0 0 0-6.88-6"/>'],
   "badge-stairs": ["#2563eb", '<path d="M3 21h5v-5h5v-5h5V6h3"/>'],
   "badge-elevator": ["#2563eb", '<rect x="5" y="2" width="14" height="20" rx="2"/><path d="m9 9 3-3 3 3M9 15l3 3 3-3"/>'],
   "badge-restroom-men": ["#2563eb", '<g fill="#fff" stroke="none"><circle cx="12" cy="4.5" r="2.3"/><path d="M9.5 8.5h5a1.5 1.5 0 0 1 1.5 1.5v5.5h-2v6.5h-4v-6.5H8V10a1.5 1.5 0 0 1 1.5-1.5z"/></g>'],
@@ -349,6 +351,12 @@ function selectedRoomFilter(roomId: string | null, level: number | null): Filter
   return ["all", ["==", ["get", "kind"], "room"], ["==", ["get", "roomId"], roomId ?? "__none__"], ["==", ["get", "level"], level ?? 1]];
 }
 
+function prefersReducedMotion() {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+const NO_FEATURE: FilterSpecification = ["==", ["get", "id"], ""];
+
 function hideBasemapExtrusions(map: MapLibreMap) {
   for (const layer of map.getStyle().layers ?? []) {
     if (layer.type === "fill-extrusion") {
@@ -373,7 +381,9 @@ function setMode(
     "walls",
     "campus-room-labels",
     "route-ribbons",
+    "route-arrows",
     "route-markers-label",
+    "room-hover",
     "room-selected-glow",
     "room-selected-beam",
     "room-selected-label",
@@ -383,7 +393,7 @@ function setMode(
     }
   }
   // Neighbors would hide floor plates indoors, so the city context is outdoor-only.
-  for (const id of ["campus-flat", "building-labels", "hunter-mass", "hunter-roofs", "context-buildings"]) {
+  for (const id of ["campus-flat", "building-labels", "campus-entrances", "hunter-mass", "hunter-roofs", "context-buildings"]) {
     if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", indoor ? "none" : "visible");
   }
 
@@ -418,6 +428,7 @@ function setMode(
     map.setPaintProperty("hunter-mass", "fill-extrusion-color", HUNTER_FACADE);
     if (map.getLayer("campus-room-labels")) map.setFilter("campus-room-labels", ["==", ["get", "id"], ""]);
     if (map.getLayer("route-ribbons")) map.setFilter("route-ribbons", ["==", ["get", "id"], ""]);
+    if (map.getLayer("route-arrows")) map.setFilter("route-arrows", ["==", ["get", "id"], ""]);
     if (map.getLayer("route-markers-label")) map.setFilter("route-markers-label", ["==", ["get", "id"], ""]);
     return;
   }
@@ -449,6 +460,7 @@ function setMode(
   ] as unknown as FilterSpecification;
 
   if (map.getLayer("route-ribbons")) map.setFilter("route-ribbons", routeFilter);
+  if (map.getLayer("route-arrows")) map.setFilter("route-arrows", routeFilter);
   if (map.getLayer("route-markers-label")) map.setFilter("route-markers-label", routeFilter);
 }
 
@@ -472,6 +484,8 @@ export function MapView({
   const activeLegIndexRef = useRef(activeLegIndex);
   const directionModeRef = useRef(directionMode);
   const dataRef = useRef<FloorFeature[]>([]);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const shownFloorRef = useRef(floor);
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState("Loading campus map…");
   onSelectRoomRef.current = onSelectRoom;
@@ -697,6 +711,20 @@ export function MapView({
             "fill-extrusion-vertical-gradient": false,
           },
         });
+        // Room under the mouse: a thin white wash on top brightens it.
+        map.addLayer({
+          id: "room-hover",
+          type: "fill-extrusion",
+          source: "floors",
+          filter: NO_FEATURE,
+          paint: {
+            "fill-extrusion-color": "#ffffff",
+            "fill-extrusion-base": ["get", "height"],
+            "fill-extrusion-height": ["+", ["get", "height"], 0.12],
+            "fill-extrusion-opacity": 0.5,
+            "fill-extrusion-vertical-gradient": false,
+          },
+        });
         map.addSource("campus-markers", {
           type: "geojson",
           data: "/data/campus-markers.geojson?v=11",
@@ -764,6 +792,22 @@ export function MapView({
             "fill-extrusion-height": ["get", "height"],
             "fill-extrusion-opacity": 0.65,
             "fill-extrusion-vertical-gradient": true,
+          },
+        });
+        map.addSource("route-arrows", {
+          type: "geojson",
+          data: routeArrows(activeRouteRef.current)(0),
+        });
+        map.addLayer({
+          id: "route-arrows",
+          type: "fill-extrusion",
+          source: "route-arrows",
+          paint: {
+            "fill-extrusion-color": "#ffffff",
+            "fill-extrusion-base": ["get", "base"],
+            "fill-extrusion-height": ["get", "height"],
+            "fill-extrusion-opacity": 1,
+            "fill-extrusion-vertical-gradient": false,
           },
         });
         map.addLayer({
@@ -849,6 +893,29 @@ export function MapView({
             "text-halo-width": 1.25,
           },
         });
+        // Street entrances, outdoors only. Accessible ones use the wheelchair badge.
+        map.addSource("campus-entrances", { type: "geojson", data: "/data/campus-entrances.geojson" });
+        map.addLayer({
+          id: "campus-entrances",
+          type: "symbol",
+          source: "campus-entrances",
+          layout: {
+            "icon-image": ["case", ["get", "accessible"], "badge-entrance-accessible", "badge-entrance"],
+            "icon-size": 0.9,
+            "icon-allow-overlap": true,
+            "text-field": ["get", "name"],
+            "text-size": 11,
+            "text-anchor": "top",
+            "text-offset": [0, 1.3],
+            "text-max-width": 10,
+            "text-optional": true,
+          },
+          paint: {
+            "text-color": "#1e293b",
+            "text-halo-color": "#ffffff",
+            "text-halo-width": 2,
+          },
+        });
         setMode(map, floorRef.current, buildingIdRef.current, directionModeRef.current);
         map.on("click", "rooms", (event) => {
           const roomId = event.features?.[0]?.properties?.roomId;
@@ -860,6 +927,27 @@ export function MapView({
         map.on("mouseleave", "rooms", () => {
           map.getCanvas().style.cursor = "";
         });
+        // Hover highlight and name tooltip, only where there is a real mouse (taps would leave them stuck).
+        if (window.matchMedia("(hover: hover)").matches) {
+          let hoveredId = "";
+          map.on("mousemove", "rooms", (event) => {
+            const props = event.features?.[0]?.properties;
+            const tooltip = tooltipRef.current;
+            if (String(props?.id ?? "") !== hoveredId) {
+              hoveredId = String(props?.id ?? "");
+              map.setFilter("room-hover", ["==", ["get", "id"], hoveredId]);
+              if (tooltip) tooltip.textContent = String(props?.name || props?.roomId || "");
+            }
+            if (!tooltip) return;
+            tooltip.hidden = !tooltip.textContent;
+            tooltip.style.transform = `translate(${event.point.x + 14}px, ${event.point.y + 18}px)`;
+          });
+          map.on("mouseleave", "rooms", () => {
+            hoveredId = "";
+            map.setFilter("room-hover", NO_FEATURE);
+            if (tooltipRef.current) tooltipRef.current.hidden = true;
+          });
+        }
         map.on("click", "campus-room-labels", (event) => {
           const roomId = event.features?.[0]?.properties?.roomId;
           if (roomId) onSelectRoomRef.current(String(roomId));
@@ -912,13 +1000,37 @@ export function MapView({
     const map = mapRef.current;
     if (!ready || !map?.getLayer("rooms")) return;
     setMode(map, floor, buildingId, directionMode);
+    map.setFilter("room-hover", NO_FEATURE);
+    if (tooltipRef.current) tooltipRef.current.hidden = true;
     // Keep the 3D structure legible through the route and nearby rooms.
-    map.setPaintProperty("rooms", "fill-extrusion-opacity", directionMode ? 0.35 : 1);
-    map.setPaintProperty("walls", "fill-extrusion-opacity", directionMode ? 0.5 : 1);
-    if (map.getLayer("campus-room-labels")) {
-      map.setPaintProperty("campus-room-labels", "icon-opacity", directionMode ? 0.3 : 1);
-      map.setPaintProperty("campus-room-labels", "text-opacity", directionMode ? 0.4 : 1);
+    const opacities: [layer: string, property: "fill-extrusion-opacity" | "icon-opacity" | "text-opacity", value: number][] = [
+      ["floor-plate", "fill-extrusion-opacity", 1],
+      ["hallways", "fill-extrusion-opacity", 1],
+      ["rooms", "fill-extrusion-opacity", directionMode ? 0.35 : 1],
+      ["room-outlines", "fill-extrusion-opacity", 1],
+      ["walls", "fill-extrusion-opacity", directionMode ? 0.5 : 1],
+      ["campus-room-labels", "icon-opacity", directionMode ? 0.3 : 1],
+      ["campus-room-labels", "text-opacity", directionMode ? 0.4 : 1],
+    ];
+    const present = opacities.filter(([layer]) => map.getLayer(layer));
+    const floorChanged = shownFloorRef.current !== floor;
+    shownFloorRef.current = floor;
+    if (!floorChanged || floor == null || prefersReducedMotion()) {
+      for (const [layer, property, value] of present) map.setPaintProperty(layer, property, value);
+      return;
     }
+    // New floor: start it invisible, then fade it in.
+    for (const [layer, property] of present) {
+      map.setPaintProperty(layer, `${property}-transition`, { duration: 0, delay: 0 });
+      map.setPaintProperty(layer, property, 0);
+    }
+    const frame = requestAnimationFrame(() => {
+      for (const [layer, property, value] of present) {
+        map.setPaintProperty(layer, `${property}-transition`, { duration: 280, delay: 0 });
+        map.setPaintProperty(layer, property, value);
+      }
+    });
+    return () => cancelAnimationFrame(frame);
   }, [ready, floor, buildingId, directionMode]);
 
   useEffect(() => {
@@ -928,7 +1040,7 @@ export function MapView({
     map.setFilter("room-selected-glow", selectedRoomFilter(selectedRoom, floorRef.current));
     map.setFilter("room-selected-beam", selectedRoomFilter(selectedRoom, floorRef.current));
     map.setFilter("room-selected-label", selectedRoomFilter(selectedRoom, floorRef.current));
-    if (!selectedRoom || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (!selectedRoom || prefersReducedMotion()) return;
 
     // Pulse only the two single-feature layers, about 30 times a second.
     let frame = 0;
@@ -953,6 +1065,26 @@ export function MapView({
     const markerSource = map.getSource("route-markers") as GeoJSONSource | undefined;
     if (ribbonSource) ribbonSource.setData(geojson.ribbons);
     if (markerSource) markerSource.setData(geojson.markers);
+  }, [ready, activeRoute]);
+
+  useEffect(() => {
+    const source = mapRef.current?.getSource("route-arrows") as GeoJSONSource | undefined;
+    if (!ready || !source) return;
+    const arrows = routeArrows(activeRoute);
+    source.setData(arrows(0));
+    if (!activeRoute || prefersReducedMotion()) return;
+
+    // Slide the arrows along the route at walking pace, about 20 updates a second.
+    let frame = 0;
+    let last = 0;
+    const slide = (time: number) => {
+      frame = requestAnimationFrame(slide);
+      if (time - last < 50) return;
+      last = time;
+      source.setData(arrows((time / 1000) * 1.4));
+    };
+    frame = requestAnimationFrame(slide);
+    return () => cancelAnimationFrame(frame);
   }, [ready, activeRoute]);
 
   useEffect(() => {
@@ -984,6 +1116,12 @@ export function MapView({
   return (
     <div className="relative h-full min-h-0 w-full">
       <div ref={rootRef} className="h-full min-h-0 w-full" />
+      <div
+        ref={tooltipRef}
+        hidden
+        aria-hidden="true"
+        className="pointer-events-none absolute top-0 left-0 z-10 max-w-56 truncate rounded-lg border border-white/60 bg-white/85 px-2.5 py-1 text-xs font-medium text-slate-800 shadow-md backdrop-blur-md"
+      />
       {status ? (
         <p className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center p-6 text-center text-sm text-[#3f3b36]">
           {status}

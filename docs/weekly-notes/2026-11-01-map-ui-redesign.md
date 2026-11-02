@@ -73,7 +73,39 @@
   Route choice uses the same model, so long vertical trips now prefer elevators. Example: E1802 → W1804 went from "4 min, 11 floors down and 11 up by stairs" to "5 min, elevators both ways". Each floor-change step now shows its own estimate ("Under a minute" / "About 1 min").
 - Tests: 63/63 pass, including new tests for the time model and the E1802 → W1804 route.
 
+## Highlight glitch fix and map interactions (same day)
+- **Highlight glitch:**
+  - Cause: some basement rooms share an ID with an upper-floor room. For example, WB406 is stored as `W406` on level -4. Selecting W406 lit both rooms, so a green box and a 14 m beam rose from the ground through the building. The camera also framed both rooms.
+  - Fix: the highlight, label and camera now match on room ID and level.
+  - The glow is now a thin slab on top of the room rather than a box sharing its walls, which stops the flicker.
+  - The beam rises only 1.5 m and the label floats 3 m up.
+  - Data issue left as is: 31 basement rooms reuse upper-floor IDs in the source data.
+- **Hover (mouse only):** the room under the cursor brightens with a white wash, and a small frosted tooltip shows its name. It's off on touch screens, where a tap would leave it stuck.
+- **Moving route arrows:**
+  - White arrows lie on the route ribbon every 5 m and slide along it at about walking pace, so the direction of travel is obvious.
+  - They're drawn as flat 3D shapes, so they sit at the right floor height. The data updates about 20 times a second.
+  - With reduced motion turned on, the arrows stay still.
+  - New `routeArrows()` in `routeGeometry.ts`, with a test.
+- **Floor fade:** switching floors fades the new floor in over about 0.3 s instead of swapping instantly. Skipped with reduced motion.
+- **Entrance markers (outdoor view):** a new data file, `public/data/campus-entrances.geojson`, holds three entrances. All are accessible according to the Hunter music department's visitor directions page, so all three show a blue wheelchair badge:
+  - West Building main entrance and Visitors Center, at 68th & Lexington (no stairs)
+  - North Building, 69th St entrance (ramp)
+  - Kaye Playhouse, 68th St entrance (ramp)
+
+  Door positions are placed on the matching street side of each building outline, not surveyed. East Building and Thomas Hunter Hall entrances are left out because no source gave their location.
+- Tests: 64/64 pass; lint clean.
+
+## Full place card (same day)
+- Clicking a room now opens the full place card from the approved mockup (`RoomCard.tsx`):
+  - **Photo area:** shows the room's approved 360° photo from `/api/panoramas`, or its photo from `ROOM_MEDIA`, with a "View in 360°" pill. A room with no photos shows "No photos of this room yet" and an "Add a 360° photo" button.
+  - **Title and actions:** Directions, Start here, 360° view (only when a photo exists) and Add 360°.
+  - **Info rows:** building, level and the campus address (695 Park Ave); "Step-free: an elevator serves this floor" when the routing graph has an elevator stop on that floor; the nearby hallway 360° link when there is one.
+  - **Photos & 360°:** a thumbnail strip with an Add tile.
+- The 360° button now appears only when a photo exists. Before, it always showed and opened an empty viewer.
+- Tests: 65/65 pass, including new place card tests.
+
 ## Open items / next steps
+- Entrances: confirm the exact door positions on site, and add the East Building and Thomas Hunter Hall doors.
 - Building/floor switching: tap-a-building was mocked up and set aside, because many buildings are connected and a per-building view gets in the way.
 - Time constants are estimates; calibrate them by timing a few real routes on campus.
 - The mobile sheet has two fixed heights (46% and 85%); there's no drag gesture yet.

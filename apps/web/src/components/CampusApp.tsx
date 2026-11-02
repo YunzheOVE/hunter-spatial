@@ -144,6 +144,17 @@ export function CampusApp() {
     () => (routingGraph ? Object.keys(routingGraph.rooms).sort() : []),
     [routingGraph]
   );
+  // "Building:level" pairs that an elevator stops at, for the place card's step-free row.
+  const elevatorFloors = useMemo(() => {
+    const floors = new Set<string>();
+    for (const edge of routingGraph?.edges ?? []) {
+      if (edge.type !== "elevator") continue;
+      for (const node of [routingGraph?.nodes[edge.from], routingGraph?.nodes[edge.to]]) {
+        if (node) floors.add(`${node.building}:${node.level}`);
+      }
+    }
+    return floors;
+  }, [routingGraph]);
 
   const searchTerm = query.trim().toLowerCase();
   const activeCategory = CATEGORIES.find((c) => c.id === category);
@@ -849,7 +860,7 @@ export function CampusApp() {
                   </ul>
                 ) : null}
                 {panel === "place" && selectedRoom ? (
-                  <RoomCard key={selectedRoom} id={selectedRoom} name={selectedInfo?.name ?? selectedRoom} building={buildingName(selectedInfo?.building ?? buildingId ?? "")} level={selectedInfo?.level ?? floor ?? 1} media={ROOM_MEDIA[selectedDetails?.roomId ?? selectedRoom]} onClose={closeSearch} onDirections={() => startDirectionsTo(selectedRoom)} onFrom={() => startDirectionsFrom(selectedRoom)} onPanorama={() => setPanoramaRoom({ id: selectedDetails?.roomId ?? selectedRoom, title: selectedInfo?.name ?? selectedRoom })} onUpload={openContribute} />
+                  <RoomCard key={selectedRoom} id={selectedRoom} locationId={selectedDetails?.roomId ?? selectedRoom} name={selectedInfo?.name ?? selectedRoom} building={buildingName(selectedInfo?.building ?? buildingId ?? "")} level={selectedInfo?.level ?? floor ?? 1} stepFree={elevatorFloors.has(`${selectedInfo?.building}:${selectedInfo?.level}`)} media={ROOM_MEDIA[selectedDetails?.roomId ?? selectedRoom]} onClose={closeSearch} onDirections={() => startDirectionsTo(selectedRoom)} onFrom={() => startDirectionsFrom(selectedRoom)} onPanorama={() => setPanoramaRoom({ id: selectedDetails?.roomId ?? selectedRoom, title: selectedInfo?.name ?? selectedRoom })} onUpload={openContribute} />
                 ) : (
                   <div className={panel ? "" : "md:hidden"}>
                     <div className="flex gap-2 overflow-x-auto px-4 pt-2 pb-1 [scrollbar-width:none] md:hidden">{categoryChips(false)}</div>
