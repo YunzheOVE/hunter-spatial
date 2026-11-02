@@ -1,7 +1,7 @@
 "use client";
 
-import { Map as MapLibreMap, NavigationControl, setWorkerUrl } from "maplibre-gl";
-import type { ExpressionSpecification, FilterSpecification, GeoJSONSource } from "maplibre-gl";
+import { LngLat, Map as MapLibreMap, NavigationControl, setWorkerUrl } from "maplibre-gl";
+import type { ExpressionSpecification, FilterSpecification, GeoJSONSource, PaddingOptions } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -148,11 +148,51 @@ function cameraPadding(map: MapLibreMap, panelOpen: boolean) {
     : { top: 150, right: 96, bottom: 120, left: 80 };
 }
 
-function fitRoom(map: MapLibreMap, data: FloorFeature[], roomId: string, panelOpen: boolean) {
-  const room = data.filter((item) => item.properties.kind === "room" && item.properties.roomId === roomId);
+const CAMERA_BEARING = -20;
+const EARTH_CIRCUMFERENCE_M = 40075016.686;
+const METERS_PER_DEGREE = 111320;
+
+function levelHeight(level: number) {
+  return Math.max(0, (level - 1) * STOREY_HEIGHT);
+}
+
+// fitBounds frames the ground, but upper floors sit up to ~65 m above it. For a camera tilted by `pitch`, a point
+// h metres up lies on the view axis when the ground centre moves h·tan(pitch) forward, and it is h/cos(pitch)
+// closer to the camera, so zoom out by that ratio to keep the intended framing.
+function fitElevated(
+  map: MapLibreMap,
+  box: [number, number, number, number],
+  heightMeters: number,
+  pitch: number,
+  padding: PaddingOptions,
+  maxZoom: number,
+) {
+  const target = map.cameraForBounds(box, { padding, pitch, bearing: CAMERA_BEARING, maxZoom });
+  if (!target?.center || target.zoom === undefined) return;
+  const center = LngLat.convert(target.center);
+  const tilt = (pitch * Math.PI) / 180;
+  const heading = (CAMERA_BEARING * Math.PI) / 180;
+  const latitude = (center.lat * Math.PI) / 180;
+  const metersPerPixel = (EARTH_CIRCUMFERENCE_M * Math.cos(latitude)) / (512 * 2 ** target.zoom);
+  const cameraMeters = (0.5 / Math.tan((map.getVerticalFieldOfView() * Math.PI) / 360)) * map.getCanvas().clientHeight * metersPerPixel;
+  const forward = heightMeters * Math.tan(tilt);
+  map.easeTo({
+    center: [
+      center.lng + (forward * Math.sin(heading)) / (METERS_PER_DEGREE * Math.cos(latitude)),
+      center.lat + (forward * Math.cos(heading)) / METERS_PER_DEGREE,
+    ],
+    zoom: target.zoom - Math.log2(1 + heightMeters / (Math.cos(tilt) * cameraMeters)),
+    pitch,
+    bearing: CAMERA_BEARING,
+    duration: 750,
+  });
+}
+
+function fitRoom(map: MapLibreMap, data: FloorFeature[], roomId: string, level: number | null, panelOpen: boolean) {
+  const room = data.filter((item) => item.properties.kind === "room" && item.properties.roomId === roomId && item.properties.level === level);
   const box = bboxOfMany(room);
   if (!box) return;
-  map.fitBounds(box, { padding: cameraPadding(map, panelOpen), pitch: 52, bearing: -20, duration: 750, maxZoom: 19.2 });
+  fitElevated(map, box, room[0].properties.base ?? 0, 52, cameraPadding(map, panelOpen), 19.2);
 }
 
 function fitFeatures(
@@ -212,6 +252,9 @@ function fitFeatures(
   const box = targetBox ?? bboxOfMany(features.length ? features : data);
   if (!box) return;
   const padding = cameraPadding(map, panelOpen);
+  const pitch = indoor ? 52 : 48;
+  const legLevel = activeLegIndex != null ? activeRoute?.legs[activeLegIndex]?.level : undefined;
+  const elevation = indoor ? levelHeight(legLevel ?? floor) : 0;
 
   const targetMaxZoom = isStepFocus
     ? 19.6 // Zoom closely on the active route corridor so users see turns and doors clearly
@@ -221,242 +264,55 @@ function fitFeatures(
         ? 18.2
         : 16.7;
 
-  map.fitBounds(box, {
-    padding,
-    pitch: indoor ? 52 : 48,
-    bearing: -20,
-    duration: 750,
-    maxZoom: targetMaxZoom,
-  });
+  fitElevated(map, box, elevation, pitch, padding, targetMaxZoom);
 }
 
-function createBadgeImage(
-  bgColor: string,
-  drawSymbol: (ctx: CanvasRenderingContext2D) => void,
-): ImageData | null {
-  const canvas = document.createElement("canvas");
-  canvas.width = 64;
-  canvas.height = 64;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
+// Icon paths on a 24px grid (Lucide-style strokes; restroom figures are filled pictograms).
+const BADGE_ICONS: Record<string, [color: string, icon: string]> = {
+  "badge-classroom": ["#1e293b", '<path d="M2 4h6a4 4 0 0 1 4 4v12a3 3 0 0 0-3-3H2zM22 4h-6a4 4 0 0 0-4 4v12a3 3 0 0 1 3-3h7z"/>'],
+  "badge-lecture": ["#7c3aed", '<path d="M2 3h20M21 3v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V3M7 21l5-5 5 5"/>'],
+  "badge-study": ["#d97706", '<path d="M22 10 12 5 2 10l10 5 10-5zM6 12v5c3 3 9 3 12 0v-5"/>'],
+  "badge-office": ["#475569", '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>'],
+  "badge-food": ["#ea580c", '<path d="M17 8h1a4 4 0 1 1 0 8h-1M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4zM6 2v2M10 2v2M14 2v2"/>'],
+  "badge-lounge": ["#b45309", '<path d="M20 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v3M2 16a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5a2 2 0 0 0-4 0v1.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5V11a2 2 0 0 0-4 0zM4 18v2M20 18v2"/>'],
+  "badge-stairs": ["#2563eb", '<path d="M3 21h5v-5h5v-5h5V6h3"/>'],
+  "badge-elevator": ["#2563eb", '<rect x="5" y="2" width="14" height="20" rx="2"/><path d="m9 9 3-3 3 3M9 15l3 3 3-3"/>'],
+  "badge-restroom-men": ["#2563eb", '<g fill="#fff" stroke="none"><circle cx="12" cy="4.5" r="2.3"/><path d="M9.5 8.5h5a1.5 1.5 0 0 1 1.5 1.5v5.5h-2v6.5h-4v-6.5H8V10a1.5 1.5 0 0 1 1.5-1.5z"/></g>'],
+  "badge-restroom-women": ["#ec4899", '<g fill="#fff" stroke="none"><circle cx="12" cy="4.5" r="2.3"/><path d="M10 8.5h4l3 8h-3v5.5h-4v-5.5H7z"/></g>'],
+  "badge-restroom": ["#15803d", '<g fill="#fff" stroke="none"><circle cx="7.5" cy="4.5" r="2"/><path d="M5.5 8h4a1 1 0 0 1 1 1v5h-1.5v7h-3v-7H4.5V9a1 1 0 0 1 1-1z"/><circle cx="16.5" cy="4.5" r="2"/><path d="M15 8h3l2.5 7H18v6h-3v-6h-2.5z"/></g>'],
+};
 
-  ctx.clearRect(0, 0, 64, 64);
-
-  // Outer white circle halo for high contrast
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(32, 32, 27, 0, Math.PI * 2);
-  ctx.fillStyle = "#ffffff";
-  ctx.shadowColor = "rgba(0, 0, 0, 0.3)";
-  ctx.shadowBlur = 4;
-  ctx.shadowOffsetY = 1.5;
-  ctx.fill();
-
-  // Circular colored background
-  ctx.beginPath();
-  ctx.arc(32, 32, 24, 0, Math.PI * 2);
-  ctx.fillStyle = bgColor;
-  ctx.fill();
-
-  // Draw white icon pictogram
-  ctx.fillStyle = "#ffffff";
-  ctx.strokeStyle = "#ffffff";
-  ctx.lineWidth = 2.6;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  drawSymbol(ctx);
-
-  ctx.restore();
-  return ctx.getImageData(0, 0, 64, 64);
+function badgeSvg(color: string, icon: string): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><defs><filter id="s" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="1.5" stdDeviation="2" flood-opacity=".3"/></filter></defs><circle cx="32" cy="32" r="27" fill="#fff" filter="url(#s)"/><circle cx="32" cy="32" r="24" fill="${color}"/><g transform="translate(18 18) scale(1.1667)" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${icon}</g></svg>`;
 }
 
-function drawStairsIcon(ctx: CanvasRenderingContext2D) {
-  ctx.save();
-  ctx.lineWidth = 3.2;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.beginPath();
-  ctx.moveTo(18, 43);
-  ctx.lineTo(25, 43);
-  ctx.lineTo(25, 35);
-  ctx.lineTo(32, 35);
-  ctx.lineTo(32, 27);
-  ctx.lineTo(39, 27);
-  ctx.lineTo(39, 19);
-  ctx.lineTo(46, 19);
-  ctx.stroke();
-  ctx.restore();
+// Classrooms show as small dots until zoomed in, so amenities stand out.
+const CLASSROOM_DOT_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><circle cx="32" cy="32" r="11" fill="#fff"/><circle cx="32" cy="32" r="7.5" fill="#1e293b"/></svg>';
+
+async function addSvgImage(map: MapLibreMap, id: string, svg: string) {
+  if (map.hasImage(id)) return;
+  const image = new Image();
+  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  await image.decode();
+  if (!map.hasImage(id)) map.addImage(id, image, { pixelRatio: 2 });
 }
 
-function drawElevatorIcon(ctx: CanvasRenderingContext2D) {
-  ctx.save();
-  ctx.lineWidth = 2.4;
-  ctx.beginPath();
-  if (typeof ctx.roundRect === "function") {
-    ctx.roundRect(19, 17, 26, 30, 4);
-  } else {
-    ctx.rect(19, 17, 26, 30);
-  }
-  ctx.stroke();
-
-  // Vertical center door division
-  ctx.beginPath();
-  ctx.moveTo(32, 17);
-  ctx.lineTo(32, 47);
-  ctx.stroke();
-
-  // Inner door panel handles/indicator bars
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(23, 24, 4, 16);
-  ctx.fillRect(37, 24, 4, 16);
-  ctx.restore();
+async function registerCustomBadges(map: MapLibreMap) {
+  await Promise.all([
+    ...Object.entries(BADGE_ICONS).map(([id, [color, icon]]) => addSvgImage(map, id, badgeSvg(color, icon))),
+    addSvgImage(map, "dot-classroom", CLASSROOM_DOT_SVG),
+  ]);
 }
 
-function drawRestroomMenIcon(ctx: CanvasRenderingContext2D) {
-  ctx.beginPath();
-  ctx.arc(32, 22, 3.5, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(26, 30);
-  ctx.lineTo(38, 30);
-  ctx.moveTo(32, 30);
-  ctx.lineTo(32, 38);
-  ctx.lineTo(28, 47);
-  ctx.moveTo(32, 38);
-  ctx.lineTo(36, 47);
-  ctx.stroke();
-}
-
-function drawRestroomWomenIcon(ctx: CanvasRenderingContext2D) {
-  ctx.beginPath();
-  ctx.arc(32, 22, 3.5, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(32, 28);
-  ctx.lineTo(25, 40);
-  ctx.lineTo(39, 40);
-  ctx.closePath();
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(29, 40);
-  ctx.lineTo(29, 47);
-  ctx.moveTo(35, 40);
-  ctx.lineTo(35, 47);
-  ctx.stroke();
-}
-
-function drawRestroomUnisexIcon(ctx: CanvasRenderingContext2D) {
-  ctx.beginPath();
-  ctx.arc(27, 23, 2.8, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(23, 29);
-  ctx.lineTo(29, 29);
-  ctx.moveTo(26, 29);
-  ctx.lineTo(26, 37);
-  ctx.lineTo(24, 46);
-  ctx.stroke();
-
-  ctx.beginPath();
-  ctx.arc(37, 23, 2.8, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(37, 28);
-  ctx.lineTo(32, 39);
-  ctx.lineTo(42, 39);
-  ctx.closePath();
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(37, 39);
-  ctx.lineTo(37, 46);
-  ctx.stroke();
-}
-
-function drawClassroomIcon(ctx: CanvasRenderingContext2D) {
-  ctx.beginPath();
-  ctx.moveTo(32, 40);
-  ctx.quadraticCurveTo(24, 41, 20, 39);
-  ctx.lineTo(20, 26);
-  ctx.quadraticCurveTo(25, 28, 32, 27);
-  ctx.quadraticCurveTo(39, 28, 44, 26);
-  ctx.lineTo(44, 39);
-  ctx.quadraticCurveTo(40, 41, 32, 40);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(32, 27);
-  ctx.lineTo(32, 40);
-  ctx.stroke();
-}
-
-function drawStudyIcon(ctx: CanvasRenderingContext2D) {
-  ctx.beginPath();
-  ctx.moveTo(32, 19);
-  ctx.lineTo(35, 27);
-  ctx.lineTo(44, 32);
-  ctx.lineTo(35, 37);
-  ctx.lineTo(32, 45);
-  ctx.lineTo(29, 37);
-  ctx.lineTo(20, 32);
-  ctx.lineTo(29, 27);
-  ctx.closePath();
-  ctx.fill();
-}
-
-function drawFoodIcon(ctx: CanvasRenderingContext2D) {
-  ctx.beginPath();
-  ctx.moveTo(22, 26);
-  ctx.lineTo(40, 26);
-  ctx.lineTo(38, 40);
-  ctx.quadraticCurveTo(31, 43, 24, 40);
-  ctx.closePath();
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.arc(40, 32, 4, -Math.PI / 2, Math.PI / 2);
-  ctx.stroke();
-}
-
-function drawOfficeIcon(ctx: CanvasRenderingContext2D) {
-  ctx.strokeRect(21, 27, 22, 15);
-  ctx.beginPath();
-  ctx.moveTo(26, 27);
-  ctx.lineTo(26, 22);
-  ctx.lineTo(38, 22);
-  ctx.lineTo(38, 27);
-  ctx.stroke();
-}
-
-function drawLectureIcon(ctx: CanvasRenderingContext2D) {
-  ctx.strokeRect(21, 22, 22, 16);
-  ctx.beginPath();
-  ctx.moveTo(32, 38);
-  ctx.lineTo(32, 45);
-  ctx.moveTo(25, 45);
-  ctx.lineTo(39, 45);
-  ctx.stroke();
-}
-
-function registerCustomBadges(map: MapLibreMap) {
-  const badgeDefs: [string, string, (ctx: CanvasRenderingContext2D) => void][] = [
-    ["badge-classroom", "#1e293b", drawClassroomIcon],
-    ["badge-stairs", "#2563eb", drawStairsIcon],
-    ["badge-elevator", "#2563eb", drawElevatorIcon],
-    ["badge-restroom-men", "#2563eb", drawRestroomMenIcon],
-    ["badge-restroom-women", "#ec4899", drawRestroomWomenIcon],
-    ["badge-restroom", "#15803d", drawRestroomUnisexIcon],
-    ["badge-study", "#d97706", drawStudyIcon],
-    ["badge-food", "#ea580c", drawFoodIcon],
-    ["badge-office", "#475569", drawOfficeIcon],
-    ["badge-lecture", "#7c3aed", drawLectureIcon],
+/** Badge per marker; classroom-category rooms named like lounges or cafés get the food & lounge icons. */
+function markerIcon(classroomIcon: string): ExpressionSpecification {
+  const name = ["downcase", ["coalesce", ["get", "name"], ""]] as ExpressionSpecification;
+  return [
+    "case",
+    ["==", ["get", "category"], "classroom"],
+    ["case", ["in", "lounge", name], "badge-lounge", ["any", ["in", "caf", name], ["in", "dining", name]], "badge-food", classroomIcon],
+    ["coalesce", ["get", "iconBadge"], "badge-classroom"],
   ];
-
-  for (const [id, color, drawer] of badgeDefs) {
-    if (!map.hasImage(id)) {
-      const img = createBadgeImage(color, drawer);
-      if (img) {
-        map.addImage(id, img, { pixelRatio: 2 });
-      }
-    }
-  }
 }
 
 async function registerRouteMarkerIcons(map: MapLibreMap) {
@@ -479,6 +335,18 @@ function roomColor(selectedRoom: string | null): ExpressionSpecification {
     "#10b981",
     ["coalesce", ["get", "color"], "#ffffff"],
   ];
+}
+
+const HUNTER_FACADE = "#7446ad";
+const HUNTER_ROOF = "#e2d6f1";
+
+// Basemap (OpenMapTiles) copies of Hunter's own buildings; excluded so they don't z-fight with the campus masses.
+// shortcut: ids found by matching basemap footprints to hunter-floors.geojson masses; recheck if the basemap or campus data changes.
+const BASEMAP_HUNTER_IDS = [1081114240, 2653453830, 2668640830, 2668865400, 36068380];
+
+// Level matters: some basement rooms share a room id with an upper floor (WB406 is stored as W406 on level -4).
+function selectedRoomFilter(roomId: string | null, level: number | null): FilterSpecification {
+  return ["all", ["==", ["get", "kind"], "room"], ["==", ["get", "roomId"], roomId ?? "__none__"], ["==", ["get", "level"], level ?? 1]];
 }
 
 function hideBasemapExtrusions(map: MapLibreMap) {
@@ -506,14 +374,18 @@ function setMode(
     "campus-room-labels",
     "route-ribbons",
     "route-markers-label",
+    "room-selected-glow",
+    "room-selected-beam",
+    "room-selected-label",
   ]) {
     if (map.getLayer(id)) {
       map.setLayoutProperty(id, "visibility", indoor ? "visible" : "none");
     }
   }
-  map.setLayoutProperty("campus-flat", "visibility", indoor ? "none" : "visible");
-  map.setLayoutProperty("building-labels", "visibility", indoor ? "none" : "visible");
-  map.setLayoutProperty("hunter-mass", "visibility", indoor ? "none" : "visible");
+  // Neighbors would hide floor plates indoors, so the city context is outdoor-only.
+  for (const id of ["campus-flat", "building-labels", "hunter-mass", "hunter-roofs", "context-buildings"]) {
+    if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", indoor ? "none" : "visible");
+  }
 
   // Skybridges connect campus buildings at Level 3.
   // - Outdoors (floor == null): 3D purple exterior mass (height 9.6m, color #5b238a)
@@ -528,7 +400,7 @@ function setMode(
       if (!indoor) {
         map.setPaintProperty("hunter-bridges", "fill-extrusion-base", 7.0);
         map.setPaintProperty("hunter-bridges", "fill-extrusion-height", 9.6);
-        map.setPaintProperty("hunter-bridges", "fill-extrusion-color", "#5b238a");
+        map.setPaintProperty("hunter-bridges", "fill-extrusion-color", HUNTER_FACADE);
         map.setPaintProperty("hunter-bridges", "fill-extrusion-opacity", 1.0);
       } else {
         map.setPaintProperty("hunter-bridges", "fill-extrusion-base", 7.0);
@@ -543,7 +415,7 @@ function setMode(
     map.setFilter("hunter-mass", ["==", ["get", "kind"], "mass"]);
     map.setPaintProperty("hunter-mass", "fill-extrusion-base", 0);
     map.setPaintProperty("hunter-mass", "fill-extrusion-height", ["get", "height"]);
-    map.setPaintProperty("hunter-mass", "fill-extrusion-color", "#5b238a");
+    map.setPaintProperty("hunter-mass", "fill-extrusion-color", HUNTER_FACADE);
     if (map.getLayer("campus-room-labels")) map.setFilter("campus-room-labels", ["==", ["get", "id"], ""]);
     if (map.getLayer("route-ribbons")) map.setFilter("route-ribbons", ["==", ["get", "id"], ""]);
     if (map.getLayer("route-markers-label")) map.setFilter("route-markers-label", ["==", ["get", "id"], ""]);
@@ -634,8 +506,18 @@ export function MapView({
       if (cancelled || map.getSource("floors")) return;
       try {
         hideBasemapExtrusions(map);
-        registerCustomBadges(map);
-        await registerRouteMarkerIcons(map);
+        // Soft afternoon light and a pale sky at the horizon when the camera tilts.
+        map.setLight({ anchor: "map", position: [1.3, 210, 35], color: "#ffffff", intensity: 0.42 });
+        map.setSky({
+          "sky-color": "#c3d7ee",
+          "horizon-color": "#eef1f4",
+          "fog-color": "#f2f2f0",
+          "sky-horizon-blend": 0.6,
+          "horizon-fog-blend": 0.8,
+          "fog-ground-blend": 0.9,
+          "atmosphere-blend": 0,
+        });
+        await Promise.all([registerCustomBadges(map), registerRouteMarkerIcons(map)]);
         if (cancelled) return;
         const response = await fetch("/data/hunter-floors.geojson?v=10");
         if (!response.ok) throw new Error(`Could not load floor data (${response.status})`);
@@ -653,17 +535,48 @@ export function MapView({
             "fill-opacity": 0.9,
           },
         });
+        if (map.getSource("openmaptiles")) {
+          map.addLayer({
+            id: "context-buildings",
+            type: "fill-extrusion",
+            source: "openmaptiles",
+            "source-layer": "building",
+            minzoom: 14,
+            filter: ["!", ["in", ["id"], ["literal", BASEMAP_HUNTER_IDS]]],
+            paint: {
+              "fill-extrusion-color": "#e6e3dd",
+              "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0],
+              "fill-extrusion-height": ["coalesce", ["get", "render_height"], 10],
+              "fill-extrusion-opacity": 0.92,
+              "fill-extrusion-vertical-gradient": true,
+            },
+          });
+        }
         map.addLayer({
           id: "hunter-mass",
           type: "fill-extrusion",
           source: "floors",
           filter: ["==", ["get", "kind"], "mass"],
           paint: {
-            "fill-extrusion-color": "#6d28d9",
+            "fill-extrusion-color": HUNTER_FACADE,
             "fill-extrusion-base": 0,
             "fill-extrusion-height": ["get", "height"],
             "fill-extrusion-opacity": 1,
             "fill-extrusion-vertical-gradient": true,
+          },
+        });
+        // A thin pale cap reads as a rooftop and separates the buildings from each other.
+        map.addLayer({
+          id: "hunter-roofs",
+          type: "fill-extrusion",
+          source: "floors",
+          filter: ["==", ["get", "kind"], "mass"],
+          paint: {
+            "fill-extrusion-color": HUNTER_ROOF,
+            "fill-extrusion-base": ["get", "height"],
+            "fill-extrusion-height": ["+", ["get", "height"], 0.6],
+            "fill-extrusion-opacity": 1,
+            "fill-extrusion-vertical-gradient": false,
           },
         });
         map.addLayer({
@@ -757,6 +670,33 @@ export function MapView({
             "fill-extrusion-vertical-gradient": false,
           },
         });
+        // Selected room: a pulsing glow slab on top of the room plus a short, faint halo above it.
+        map.addLayer({
+          id: "room-selected-glow",
+          type: "fill-extrusion",
+          source: "floors",
+          filter: selectedRoomFilter(null, null),
+          paint: {
+            "fill-extrusion-color": "#34d399",
+            "fill-extrusion-base": ["get", "height"],
+            "fill-extrusion-height": ["+", ["get", "height"], 0.3],
+            "fill-extrusion-opacity": 0.9,
+            "fill-extrusion-vertical-gradient": false,
+          },
+        });
+        map.addLayer({
+          id: "room-selected-beam",
+          type: "fill-extrusion",
+          source: "floors",
+          filter: selectedRoomFilter(null, null),
+          paint: {
+            "fill-extrusion-color": "#6ee7b7",
+            "fill-extrusion-base": ["+", ["get", "height"], 0.3],
+            "fill-extrusion-height": ["+", ["get", "height"], 1.5],
+            "fill-extrusion-opacity": 0.25,
+            "fill-extrusion-vertical-gradient": false,
+          },
+        });
         map.addSource("campus-markers", {
           type: "geojson",
           data: "/data/campus-markers.geojson?v=11",
@@ -768,7 +708,7 @@ export function MapView({
           filter: ["==", ["get", "level"], floorRef.current ?? 1],
           layout: {
             "symbol-placement": "point",
-            "icon-image": ["coalesce", ["get", "iconBadge"], "badge-classroom"],
+            "icon-image": ["step", ["zoom"], markerIcon("dot-classroom"), 18.6, markerIcon("badge-classroom")],
             "icon-size": [
               "interpolate",
               ["linear"],
@@ -863,6 +803,28 @@ export function MapView({
             ],
             "text-halo-color": "#ffffff",
             "text-halo-width": 2.5,
+          },
+        });
+        map.addLayer({
+          id: "room-selected-label",
+          type: "symbol",
+          source: "campus-markers",
+          filter: selectedRoomFilter(null, null),
+          layout: {
+            "symbol-placement": "point",
+            "text-field": ["get", "roomId"],
+            "text-size": 16,
+            "text-allow-overlap": true,
+            "text-ignore-placement": true,
+            "symbol-height-anchor": "absolute",
+            "symbol-height-offset": ["+", ["get", "base"], 3],
+            "text-pitch-alignment": "viewport",
+            "text-rotation-alignment": "viewport",
+          },
+          paint: {
+            "text-color": "#065f46",
+            "text-halo-color": "#ffffff",
+            "text-halo-width": 3,
           },
         });
         map.addLayer({
@@ -963,6 +925,24 @@ export function MapView({
     const map = mapRef.current;
     if (!ready || !map?.getLayer("rooms")) return;
     map.setPaintProperty("rooms", "fill-extrusion-color", roomColor(selectedRoom));
+    map.setFilter("room-selected-glow", selectedRoomFilter(selectedRoom, floorRef.current));
+    map.setFilter("room-selected-beam", selectedRoomFilter(selectedRoom, floorRef.current));
+    map.setFilter("room-selected-label", selectedRoomFilter(selectedRoom, floorRef.current));
+    if (!selectedRoom || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    // Pulse only the two single-feature layers, about 30 times a second.
+    let frame = 0;
+    let last = 0;
+    const pulse = (time: number) => {
+      frame = requestAnimationFrame(pulse);
+      if (time - last < 33) return;
+      last = time;
+      const wave = (Math.sin(time / 380) + 1) / 2;
+      map.setPaintProperty("room-selected-glow", "fill-extrusion-opacity", 0.55 + wave * 0.45);
+      map.setPaintProperty("room-selected-beam", "fill-extrusion-opacity", 0.1 + wave * 0.25);
+    };
+    frame = requestAnimationFrame(pulse);
+    return () => cancelAnimationFrame(frame);
   }, [ready, selectedRoom]);
 
   useEffect(() => {
@@ -979,7 +959,7 @@ export function MapView({
     const map = mapRef.current;
     // Picking a room brings it into view; route framing below takes over in Directions.
     if (!ready || !map || !selectedRoom || directionMode) return;
-    fitRoom(map, dataRef.current, selectedRoom, panelOpenRef.current);
+    fitRoom(map, dataRef.current, selectedRoom, floorRef.current, panelOpenRef.current);
     return () => { map.stop(); };
   }, [ready, selectedRoom, directionMode]);
 

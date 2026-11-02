@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { findRoute, type RoutingGraphData } from "./pathfinding";
-import { routeToGeoJSON, smoothRoutePolyline } from "./routeGeometry";
+import { routeArrows, routeToGeoJSON, smoothRoutePolyline } from "./routeGeometry";
 
 const graphPath = path.resolve(__dirname, "../../public/data/routing-graph.json");
 const rawJson = fs.readFileSync(graphPath, "utf-8");
@@ -61,5 +61,23 @@ describe("Route Geometry Converter", () => {
     const geojson = routeToGeoJSON(null);
     expect(geojson.ribbons.features.length).toBe(0);
     expect(geojson.markers.features.length).toBe(0);
+  });
+
+  it("places arrows along the route that point the way and slide with the phase", () => {
+    const route = findRoute(testGraphData, "N304", "N302");
+    const arrows = routeArrows(route, 5);
+    const [first] = arrows(0).features;
+    expect(first.properties.level).toBe(3);
+    expect(first.geometry.coordinates.length).toBeGreaterThan(1);
+
+    // The first arrow's tip points toward the second arrow.
+    const [[tip, left, right]] = first.geometry.coordinates[0];
+    const back = [(left[0] + right[0]) / 2, (left[1] + right[1]) / 2];
+    const [[nextTip]] = first.geometry.coordinates[1];
+    const along = (tip[0] - back[0]) * (nextTip[0] - back[0]) + (tip[1] - back[1]) * (nextTip[1] - back[1]);
+    expect(along).toBeGreaterThan(0);
+
+    expect(arrows(2.5).features[0].geometry.coordinates[0]).not.toEqual(first.geometry.coordinates[0]);
+    expect(arrows(5).features[0].geometry.coordinates[0]).toEqual(first.geometry.coordinates[0]);
   });
 });

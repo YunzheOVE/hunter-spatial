@@ -354,3 +354,62 @@ export function routeToGeoJSON(route: RouteResult | null | undefined): RouteGeoJ
     markers: { type: "FeatureCollection", features: markerFeatures },
   };
 }
+
+/**
+ * Arrow triangles every `spacingMeters` along each leg, lying just above the ribbon.
+ * Returns a function of `phase` (meters) so the caller can slide the arrows along the route.
+ */
+export function routeArrows(route: RouteResult | null | undefined, spacingMeters: number = 5) {
+  const meterToDeg = 1 / 111320;
+  const legs = (route?.legs ?? [])
+    .filter((leg) => leg.coordinates.length >= 2)
+    .map((leg, index) => {
+      const coords = smoothRoutePolyline(leg.coordinates, 1.2, 4);
+      const segments = coords.slice(1).map((end, i) => {
+        const start = coords[i];
+        const cosLat = Math.max(0.01, Math.cos((((start[1] + end[1]) / 2) * Math.PI) / 180));
+        const dx = (end[0] - start[0]) * 111320 * cosLat;
+        const dy = (end[1] - start[1]) * 111320;
+        return { start, end, cosLat, length: Math.hypot(dx, dy), ux: dx, uy: dy };
+      }).filter((segment) => segment.length > 1e-6);
+      const floorBase = Math.max(0, (leg.level - 1) * STOREY_HEIGHT);
+      return { leg, index, segments, base: floorBase + 0.38 };
+    });
+
+  return (phase: number): RouteGeoJSON["ribbons"] => ({
+    type: "FeatureCollection",
+    features: legs.map(({ leg, index, segments, base }) => {
+      const triangles: number[][][][] = [];
+      let travelled = 0;
+      let next = ((phase % spacingMeters) + spacingMeters) % spacingMeters;
+      for (const { start, end, cosLat, length, ux, uy } of segments) {
+        for (; next < travelled + length; next += spacingMeters) {
+          const t = (next - travelled) / length;
+          const x = start[0] + (end[0] - start[0]) * t;
+          const y = start[1] + (end[1] - start[1]) * t;
+          const [dx, dy] = [ux / length, uy / length];
+          const point = (along: number, side: number) => [
+            x + ((dx * along - dy * side) * meterToDeg) / cosLat,
+            y + (dy * along + dx * side) * meterToDeg,
+          ];
+          const tip = point(0.4, 0);
+          triangles.push([[tip, point(-0.3, 0.3), point(-0.3, -0.3), tip]]);
+        }
+        travelled += length;
+      }
+      return {
+        type: "Feature" as const,
+        geometry: { type: "MultiPolygon" as const, coordinates: triangles },
+        properties: {
+          id: `arrows-${index}`,
+          building: leg.building,
+          level: leg.level,
+          toLevel: leg.toLevel ?? leg.level,
+          base,
+          height: base + 0.05,
+          distanceMeters: leg.distanceMeters,
+        },
+      };
+    }),
+  });
+}

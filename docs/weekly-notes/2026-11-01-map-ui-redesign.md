@@ -56,8 +56,26 @@
 - **Translucent cards:** every floating card is frosted glass (`bg-white/75` + backdrop blur): the search panel and bottom sheet, chips, floor picker, building menu, trip bar, map zoom controls and the logo card. The guidance banner is 85% opaque purple. Fills inside the cards are translucent too.
 - **Researched indoor-map patterns** (Google Maps indoor, Mapbox indoor, Apple MapKit/IMDF) and wrote down options for an easier building/floor switcher. Not implemented yet.
 
+## Map visuals, high-floor zoom and travel time (same day)
+- **Campus in context (outdoor):** surrounding Manhattan buildings now render as soft grey 3D, from basemap building heights. Basemap copies of Hunter's own buildings are excluded by ID so they don't flicker against ours. Hunter buildings have a lighter purple facade and a pale roof cap. Added gentle directional light and a sky gradient at the horizon. The grey neighbors are outdoor-only, so they don't block floor plans indoors.
+- **Selected room:** stays green, and now also pulses with a glow, shows a faint green light beam above it, and has a floating room-number label. The pulse is skipped when the user has reduced motion turned on.
+- **Map icons:**
+  - The hand-drawn canvas badges are replaced by SVG icons, which are crisper and much shorter code.
+  - New lounge icon; rooms named lounge, café or dining get the food & lounge icons.
+  - Classrooms show as small dots until zoom 18.6, then switch to book icons, so restrooms, food, stairs and elevators stand out.
+- **High-floor zoom bug:** selecting a room on an upper floor framed the middle of the building. Cause: `fitBounds` aims at the ground, but Level 18 is 59.5 m up, and under a tilted camera that height shifts the room off-center. Fix: `fitElevated()` moves the target `h·tan(pitch)` along the view direction (exact for the screen center) and zooms out by `log2(1 + h / (cos(pitch)·cameraDistance))`. MapLibre's built-in center elevation was tried first and dropped: without terrain, `easeTo` ignores it and nearby 3D geometry gets clipped.
+- **Travel time:** time was distance ÷ 1.2 m/s, so a staircase floor counted as about 3 seconds. New `edgeSeconds()` model:
+  - walking 1.2 m/s
+  - stairs 16 s per floor up, 11 s per floor down
+  - elevator 30 s wait + 4 s per floor
+  - escalator 10 s per floor
+
+  Route choice uses the same model, so long vertical trips now prefer elevators. Example: E1802 → W1804 went from "4 min, 11 floors down and 11 up by stairs" to "5 min, elevators both ways". Each floor-change step now shows its own estimate ("Under a minute" / "About 1 min").
+- Tests: 63/63 pass, including new tests for the time model and the E1802 → W1804 route.
+
 ## Open items / next steps
-- Rework building/floor switching (see the options in the chat summary): select the building by tapping it on the map, or detect it from the camera, and only show floors for that building.
+- Building/floor switching: tap-a-building was mocked up and set aside, because many buildings are connected and a per-building view gets in the way.
+- Time constants are estimates; calibrate them by timing a few real routes on campus.
 - The mobile sheet has two fixed heights (46% and 85%); there's no drag gesture yet.
 - The Contribute panel still uses the original form layout, restyled (no drag-and-drop zone or segmented coverage control yet).
 - Not yet tested on a real phone or with a screen reader.

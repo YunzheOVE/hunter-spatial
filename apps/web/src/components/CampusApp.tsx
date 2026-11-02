@@ -17,6 +17,7 @@ import {
 import { canonicalRoomId, parseRoomId } from "@/lib/parseRoomId";
 import {
   fetchRoutingGraph,
+  edgeSeconds,
   findRoute,
   resolveRoom,
   type RouteResult,
@@ -73,6 +74,10 @@ function buildingName(id: string) {
 
 function levelName(level: number) {
   return level === 0 ? "Concourse" : `Level ${level}`;
+}
+
+function transitionTime(seconds: number) {
+  return seconds < 60 ? "Under a minute" : `About ${Math.round(seconds / 60)} min`;
 }
 
 export function CampusApp() {
@@ -319,7 +324,7 @@ export function CampusApp() {
         steps.push({
           icon: t.type,
           text: t.description,
-          subtext: `Less than a minute`,
+          subtext: transitionTime(edgeSeconds(t.type, 0, t.fromLevel, t.toLevel)),
           isTransition: true,
           legIndex: i,
         });

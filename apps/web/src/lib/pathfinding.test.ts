@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { findRoute, resolveRoom, type RoutingGraphData } from "./pathfinding";
+import { edgeSeconds, findRoute, resolveRoom, type RoutingGraphData } from "./pathfinding";
 
 const graphPath = path.resolve(__dirname, "../../public/data/routing-graph.json");
 const rawJson = fs.readFileSync(graphPath, "utf-8");
@@ -254,5 +254,23 @@ describe("Client-side Pathfinding Engine", () => {
       expect(lastLeg.building).toBe("N");
       expect(lastLeg.level).toBe(10);
     });
+  });
+});
+
+describe("travel time model", () => {
+  it("charges stairs and elevators per floor instead of as flat walking distance", () => {
+    expect(edgeSeconds("walk", 12, 3, 3)).toBe(10);
+    expect(edgeSeconds("stairs", 0, 18, 7)).toBe(121);
+    expect(edgeSeconds("stairs", 0, 7, 18)).toBe(176);
+    expect(edgeSeconds("elevator", 0, 7, 18)).toBe(74);
+  });
+
+  it("prefers elevators for long vertical trips and estimates realistic time", () => {
+    const route = findRoute(testGraphData, "E1802", "W1804");
+    expect(route).not.toBeNull();
+    if (!route) return;
+    const longStairs = route.transitions.filter((t) => t.type === "stairs" && Math.abs(t.toLevel - t.fromLevel) > 3);
+    expect(longStairs).toHaveLength(0);
+    expect(route.estimatedSeconds).toBeGreaterThan(180);
   });
 });

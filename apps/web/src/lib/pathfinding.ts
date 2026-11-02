@@ -67,9 +67,23 @@ export type FindRouteOptions = {
 
 const STOREY_HEIGHT_M = 3.5;
 const WALKING_SPEED_MPS = 1.2; // ~4.3 km/h average indoor walk speed
-const STAIRS_EFFORT_PENALTY = 8.0; // equivalent extra meters for stair climbing
-const ELEVATOR_WAIT_PENALTY = 25.0; // equivalent extra meters for elevator wait
-const ROOM_PASSTHROUGH_PENALTY = 500.0; // equivalent extra meters to avoid cutting through private rooms/classrooms
+// Vertical travel per storey (~3.5 m incl. landings); stairs follow typical pedestrian stair speeds.
+const STAIRS_UP_S_PER_FLOOR = 16;
+const STAIRS_DOWN_S_PER_FLOOR = 11;
+const ESCALATOR_S_PER_FLOOR = 10;
+const ELEVATOR_WAIT_S = 30; // average wait for a car
+const ELEVATOR_S_PER_FLOOR = 4;
+const ROOM_PASSTHROUGH_PENALTY_S = 420; // avoid cutting through private rooms/classrooms
+
+/** Seconds to traverse one link; drives both route choice and the time estimate. */
+export function edgeSeconds(type: string, horizontalMeters: number, fromLevel: number, toLevel: number): number {
+  const walk = horizontalMeters / WALKING_SPEED_MPS;
+  const floors = Math.abs(toLevel - fromLevel);
+  if (!floors) return walk;
+  if (type === "elevator") return walk + ELEVATOR_WAIT_S + floors * ELEVATOR_S_PER_FLOOR;
+  if (type === "escalator") return walk + floors * ESCALATOR_S_PER_FLOOR;
+  return walk + floors * (toLevel > fromLevel ? STAIRS_UP_S_PER_FLOOR : STAIRS_DOWN_S_PER_FLOOR);
+}
 
 export const CAMPUS_BUILDING_NAMES: Record<string, string> = {
   W: "West Building",
@@ -330,21 +344,18 @@ export function findRoute(
     heuristic(from: Node<RoutingNode>, to: Node<RoutingNode>) {
       const fromNode = from.data;
       const toNode = to.data;
+      // Lower bound in seconds: straight-line walk plus the fastest per-floor rate (elevator, no wait).
       const hDist = haversineMeters(fromNode.coordinates, toNode.coordinates);
-      const vDist = Math.abs(fromNode.level - toNode.level) * STOREY_HEIGHT_M;
-      return Math.hypot(hDist, vDist);
+      return hDist / WALKING_SPEED_MPS + Math.abs(fromNode.level - toNode.level) * ELEVATOR_S_PER_FLOOR;
     },
     distance(
       from: Node<RoutingNode>,
       to: Node<RoutingNode>,
       link: Link<RoutingEdge>
     ) {
-      let cost = link.data.distance;
-      if (link.data.type === "stairs") {
-        cost += STAIRS_EFFORT_PENALTY;
-      } else if (link.data.type === "elevator") {
-        cost += ELEVATOR_WAIT_PENALTY;
-      }
+      const sameLevel = from.data.level === to.data.level;
+      const horizontal = sameLevel ? link.data.distance : haversineMeters(from.data.coordinates, to.data.coordinates);
+      let cost = edgeSeconds(link.data.type, horizontal, from.data.level, to.data.level);
 
       // Heavily penalize cutting through an intermediate private room/classroom
       // while still allowing entering destination or leaving origin rooms.
@@ -354,7 +365,7 @@ export function findRoute(
         toId !== startNodeId &&
         restrictedNodes.has(toId)
       ) {
-        cost += ROOM_PASSTHROUGH_PENALTY;
+        cost += ROOM_PASSTHROUGH_PENALTY_S;
       }
 
       return cost;
@@ -373,6 +384,7 @@ export function findRoute(
   const legs: RouteLeg[] = [];
   const transitions: RouteTransition[] = [];
   let totalDistance = 0;
+  let totalSeconds = 0;
 
   const firstNode = graphData.nodes[nodePath[0]];
   let currentLeg: RouteLeg = {
@@ -394,14 +406,15 @@ export function findRoute(
     const segDistance = Math.hypot(hDist, vDist);
     totalDistance += segDistance;
 
+    const link = graph.hasLink(prevNodeId, nodeId) || graph.hasLink(nodeId, prevNodeId);
+    const edgeType = link?.data?.type;
+    totalSeconds += edgeSeconds(edgeType ?? "walk", hDist, prevNode.level, node.level);
+
     const isTransition = prevNode.building !== node.building || prevNode.level !== node.level;
 
     if (isTransition) {
       let transitionType: RouteTransition["type"] = "connector";
       let desc = "";
-
-      const link = graph.hasLink(prevNodeId, nodeId) || graph.hasLink(nodeId, prevNodeId);
-      const edgeType = link?.data?.type;
 
       const isCrossBuilding = Boolean(
         prevNode.building && node.building && prevNode.building !== node.building
@@ -474,7 +487,7 @@ export function findRoute(
   legs.push(currentLeg);
 
   const roundedDistance = Math.round(totalDistance * 10) / 10;
-  const estimatedSeconds = Math.round(roundedDistance / WALKING_SPEED_MPS);
+  const estimatedSeconds = Math.round(totalSeconds);
 
   let summary = `Walk ~${Math.round(roundedDistance)}m (${Math.ceil(estimatedSeconds / 60)} min)`;
   if (transitions.length > 0) {
