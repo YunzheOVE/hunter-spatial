@@ -91,6 +91,15 @@ Images must decode correctly and cannot be animated. Sharp performs validation
 only; the original image bytes and format are preserved. Locations, coverage,
 and files are validated again on the server. File paths use generated names.
 
+The file picker displays upload guidelines for panorama format, location accuracy,
+image quality, privacy, limits, and previewing. Before submission, the browser
+checks file type/size, decodes the image, and checks its pixel count. Full-sphere
+coverage (360° × 180°) requires an exact 2:1 width-to-height ratio; partial coverage
+does not. Changing coverage rechecks this rule without reloading the file. Preview
+and submission stay disabled while decoding or when checks fail. The backend also
+checks dimensions and the full-sphere ratio. These technical checks cannot prove
+that a picture is a panorama or assess its location, quality, or privacy.
+
 Every submission starts pending with its uploader derived from the session.
 My submissions shows the current user's history and statuses, with private image
 previews. No review decisions are available until Phase 4. Public map viewers

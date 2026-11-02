@@ -6,7 +6,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { getDataDirectory, isKnownLocation, openPanoramaDatabase } from "./panorama-store.mjs";
 import { requireUser } from "./auth";
 import { checkSameOrigin, errorResponse, HttpError, readLimitedBody } from "./http";
-import { coverageError, MAX_PANORAMA_BYTES, type Submission } from "../src/lib/uploads";
+import { coverageError, MAX_PANORAMA_BYTES, MAX_PANORAMA_PIXELS, panoramaDimensionsError, type Submission } from "../src/lib/uploads";
 
 export function ownSubmissions(database: DatabaseSync, userId: number): Submission[] {
   return database.prepare(`SELECT id, location_id, status, uploaded_at, reviewed_at, haov, vaov, v_offset
@@ -33,15 +33,18 @@ export async function saveSubmission(database: DatabaseSync, form: FormData, use
   const bytes = Buffer.from(await file.arrayBuffer());
   let extension: string;
   try {
-    const image = sharp(bytes, { limitInputPixels: 64_000_000, failOn: "error" });
+    const image = sharp(bytes, { limitInputPixels: MAX_PANORAMA_PIXELS, failOn: "error" });
     const metadata = await image.metadata();
     const formats: Record<string, string> = { jpeg: "jpg", png: "png", webp: "webp" };
     if (!metadata.format || !formats[metadata.format] || (metadata.pages ?? 1) > 1) throw new Error("Unsupported image");
+    const invalidDimensions = panoramaDimensionsError(metadata.width ?? 0, metadata.height ?? 0, haov === 360 && vaov === 180);
+    if (invalidDimensions) throw new HttpError(400, invalidDimensions);
     // Decode a small preview to detect corrupt data. Store the original bytes;
     // this is validation, not conversion or optimization of the uploaded file.
     await image.resize(16, 16, { fit: "inside", withoutEnlargement: true }).toBuffer();
     extension = formats[metadata.format];
-  } catch {
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
     throw new HttpError(400, "Choose a readable, non-animated JPEG, PNG, or WebP image up to 64 megapixels.");
   }
   const relativePath = `uploads/${randomUUID()}.${extension}`;

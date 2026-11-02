@@ -121,6 +121,7 @@ Earlier approvals remain stored. Pending and rejected submissions cannot displac
 - Validate the selected ID on the backend.
 - Accept readable, non-animated JPEG, PNG, and WebP images up to 20 MB and 64 megapixels; preserve their format and generate unique filenames.
 - Support full or partial viewing settings and preview before submission.
+- Display concise upload guidelines beside the file picker. Check format/size, browser decoding, the 64-megapixel limit, selected location, and coverage before submission. Require an exact 2:1 image for full-sphere coverage (360° × 180°), including when selected through custom settings; allow other proportions for partial panoramas. Repeat technical validation on the backend. Leave image quality, actual coverage, location accuracy, and privacy to reviewers.
 - Save pending records using the authenticated uploader. Clean up the image if database insertion fails.
 - Add **My submissions** and restrict unpublished images to their uploader and reviewers.
 

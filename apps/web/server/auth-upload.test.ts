@@ -233,4 +233,14 @@ describe("user panorama submissions", () => {
     expect(readdirSync(path.join(directory, "uploads"))).toEqual([]);
   });
 
+  it("enforces full-sphere proportions on the backend while accepting partial images", async () => {
+    const { user } = await signUp();
+    const square = await sharp({ create: { width: 64, height: 64, channels: 3, background: "purple" } }).png().toBuffer();
+    const image = new File([new Uint8Array(square)], "square.png", { type: "image/png" });
+    await expect(saveSubmission(database, form({ image, haov: "360", vaov: "180" }), user.id, directory)).rejects.toMatchObject({ status: 400, message: expect.stringContaining("2:1") });
+    expect(readdirSync(path.join(directory, "uploads"))).toEqual([]);
+    expect(await saveSubmission(database, form({ image }), user.id, directory)).toMatchObject({ status: "pending" });
+    expect(await saveSubmission(database, form({ haov: "360", vaov: "180" }), user.id, directory)).toMatchObject({ status: "pending" });
+  });
+
 });
