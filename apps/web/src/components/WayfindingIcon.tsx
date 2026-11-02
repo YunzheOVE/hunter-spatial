@@ -10,6 +10,11 @@ export type WayfindingIconName =
   | "connector"
   | "destination";
 
+/** Stroke icon frame shared by the map UI's controls; pass the SVG paths as children. */
+export function Glyph({ children, size = 20 }: { children: ReactNode; size?: number }) {
+  return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{children}</svg>;
+}
+
 export function WayfindingIcon({ name, size = 20, className }: {
   name: WayfindingIconName;
   size?: number;

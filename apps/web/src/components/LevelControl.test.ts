@@ -15,3 +15,14 @@ it("starts compact with descending low levels and keeps high selections visible"
   expect(low).toContain('aria-expanded="false"');
   expect(render(18)).toContain('aria-label="Level 18" aria-pressed="true"');
 });
+
+it("offers building choice, outdoor view and marks levels on the active route", () => {
+  const html = renderToStaticMarkup(createElement(LevelControl, {
+    levels: campusLevelsForSelection("W"), floor: null, onSelect: () => {},
+    buildingId: "W", onSelectBuilding: () => {}, onOutdoor: () => {}, routeLevels: [1, 2],
+  }));
+  expect(html).toContain('aria-label="Choose building: West Building"');
+  expect(html).toContain('aria-label="Outdoor campus" aria-pressed="true"');
+  expect(html).toContain('aria-label="Level 2, on route"');
+  expect(html).not.toContain('aria-label="Level 3, on route"');
+});

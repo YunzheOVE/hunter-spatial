@@ -16,3 +16,4 @@ scripts/scratch*.py
 scratch/
 project/
 local-data/
+.claude/

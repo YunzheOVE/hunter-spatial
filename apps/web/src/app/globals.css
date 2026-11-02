@@ -15,7 +15,42 @@ body,
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font-family: Arial, "Segoe UI", sans-serif;
+  font-family: var(--font-inter), system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* Map controls match the floating cards; phones pinch-zoom and keep the bottom sheet clear. */
+.maplibregl-ctrl-bottom-right .maplibregl-ctrl-group {
+  margin: 0 16px 36px 0;
+  border: 1px solid rgb(255 255 255 / 60%);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 75%);
+  backdrop-filter: blur(12px) saturate(1.5);
+  box-shadow: 0 1px 3px rgb(60 64 67 / 25%), 0 4px 12px rgb(60 64 67 / 12%);
+  overflow: hidden;
+}
+
+.maplibregl-ctrl-group button {
+  width: 44px;
+  height: 44px;
+}
+
+@media (max-width: 767px) {
+  .maplibregl-ctrl-bottom-right .maplibregl-ctrl-group {
+    display: none;
+  }
+
+  /* Attribution must stay visible, so lift it above the sheet into the top-left. */
+  .maplibregl-ctrl-bottom-right {
+    top: 60px;
+    bottom: auto;
+    right: auto;
+    left: 0;
+    max-width: calc(100% - 80px);
+  }
+
+  .maplibregl-ctrl-attrib {
+    font-size: 10px;
+  }
 }
 
 .maplibregl-map,

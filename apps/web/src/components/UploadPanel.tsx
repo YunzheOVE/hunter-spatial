@@ -7,9 +7,9 @@ import { coverageError, MAX_PANORAMA_BYTES, type SessionUser, type Submission } 
 import { PanoramaPreviewModal } from "./PanoramaDialog";
 import { UserLogin } from "./UserLogin";
 
-const inputClass = "mt-1 w-full rounded-xl border border-[#dedfe3] bg-white/90 px-3 py-2.5 text-sm text-[#2f3137]";
-const primaryClass = "rounded-xl bg-[#5b238a] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#4b1d72] disabled:opacity-50";
-const secondaryClass = "rounded-xl border border-[#5b238a]/30 bg-white/70 px-3 py-2 text-sm font-semibold text-[#5b238a] disabled:opacity-50";
+const inputClass = "mt-1.5 min-h-11 w-full rounded-[10px] border-0 bg-black/5 px-3.5 py-2.5 text-[15px] text-[#1f1f1f]";
+const primaryClass = "min-h-11 rounded-full bg-[#5b238a] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#4b1d72] disabled:opacity-50";
+const secondaryClass = "min-h-11 rounded-full border border-[#d3c3e3] bg-white/70 px-4 py-2 text-sm font-semibold text-[#5b238a] disabled:opacity-50";
 
 class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); }
@@ -22,11 +22,18 @@ async function api<T>(url: string, options?: RequestInit): Promise<T> {
   return body;
 }
 
-export function UploadPanel({ graph, initialLocationId, locationsError }: { graph: RoutingGraphData | null; initialLocationId: string | null; locationsError: boolean }) {
-  const [user, setUser] = useState<SessionUser | null>(null);
-  const [checkingSession, setCheckingSession] = useState(true);
+// Session lives in CampusApp so the account button and this panel stay in sync.
+export function UploadPanel({ graph, initialLocationId, locationsError, user, checkingSession, sessionError = "", onUserChange: setUser }: {
+  graph: RoutingGraphData | null;
+  initialLocationId: string | null;
+  locationsError: boolean;
+  user: SessionUser | null;
+  checkingSession: boolean;
+  sessionError?: string;
+  onUserChange: (user: SessionUser | null) => void;
+}) {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(sessionError);
   const [notice, setNotice] = useState("");
   const [search, setSearch] = useState("");
   const [locationId, setLocationId] = useState(initialLocationId ?? "");
@@ -39,15 +46,6 @@ export function UploadPanel({ graph, initialLocationId, locationsError }: { grap
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [listError, setListError] = useState("");
   const [loadingList, setLoadingList] = useState(false);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    api<{ user: SessionUser | null }>("/api/auth/session", { signal: controller.signal })
-      .then((body) => { if (!controller.signal.aborted) setUser(body.user); })
-      .catch(() => { if (!controller.signal.aborted) setError("Unable to check sign-in. Refresh the page to try again."); })
-      .finally(() => { if (!controller.signal.aborted) setCheckingSession(false); });
-    return () => controller.abort();
-  }, []);
 
   useEffect(() => {
     if (!file) { setLocalUrl(""); return; }
@@ -112,8 +110,8 @@ export function UploadPanel({ graph, initialLocationId, locationsError }: { grap
     finally { setLoadingList(false); }
   }
 
-  return <section aria-label="Panorama uploads" className="mt-4 space-y-4 text-sm">
-    <div><h2 className="text-base font-bold text-[#2f3137]">Share a campus panorama</h2><p className="mt-1 text-xs leading-5 text-[#555861]">Choose a location and submit your panorama for review.</p></div>
+  return <section aria-label="Panorama uploads" className="space-y-4 px-6 py-5 text-sm text-[#1f1f1f]">
+    <div><h2 className="text-base font-semibold">Add a 360° photo</h2><p className="mt-1 text-[13px] leading-5 text-[#5f6368]">Choose a location and submit your panorama for review.</p></div>
     {checkingSession ? <p role="status">Checking sign-in…</p> : !user ? <UserLogin onSignIn={(signedInUser) => { setUser(signedInUser); setError(""); setNotice(""); }} /> : <>
       <div className="flex items-center justify-between gap-2 rounded-xl bg-white/70 p-3"><p className="min-w-0 break-words text-xs">Signed in as <strong>{user.name}</strong></p><button type="button" className="shrink-0 text-xs font-semibold text-[#5b238a] underline" onClick={signOut} disabled={busy}>Sign out</button></div>
       <form onSubmit={submit} className="space-y-3">

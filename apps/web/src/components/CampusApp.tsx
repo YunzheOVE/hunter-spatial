@@ -5,9 +5,10 @@ import { RoomCard } from "./RoomCard";
 import { PanoramaModal } from "./PanoramaModal";
 import { UploadPanel } from "./UploadPanel";
 import { LevelControl } from "./LevelControl";
-import { WayfindingIcon, type WayfindingIconName } from "./WayfindingIcon";
+import { Glyph, WayfindingIcon, type WayfindingIconName } from "./WayfindingIcon";
 import { ROOM_MEDIA } from "@/lib/roomMedia";
-import { useEffect, useMemo, useRef, useState } from "react";
+import type { SessionUser } from "@/lib/uploads";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   campusLevelsForSelection,
   type CampusBuildingId,
@@ -18,7 +19,6 @@ import {
   fetchRoutingGraph,
   findRoute,
   resolveRoom,
-  type RouteLeg,
   type RouteResult,
   type RoutingGraphData,
 } from "@/lib/pathfinding";
@@ -33,17 +33,64 @@ const BUILDINGS = [
   { id: "BTB", name: "Baker Theatre" },
 ] as const;
 
+const POPULAR_ROOMS = ["W305", "E303", "N11007", "W502", "B201", "BTB105"];
+
+// Categories match the room names that exist in routing-graph.json.
+const CATEGORIES: { id: string; label: string; icon: ReactNode; test: (id: string, name: string) => boolean }[] = [
+  { id: "classroom", label: "Classrooms", icon: <path d="M5 21V4a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v17M3 21h18M15 12h.01" />, test: (_, name) => /classroom/i.test(name) },
+  { id: "restroom", label: "Restrooms", icon: <><circle cx="8" cy="5" r="1.6" /><circle cx="16" cy="5" r="1.6" /><path d="M8 9v12M16 9l-3 7h6l-3-7" /></>, test: (_, name) => /washroom|restroom/i.test(name) },
+  { id: "food", label: "Food & lounges", icon: <path d="M4 8h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5zM17 10h2a2 2 0 0 1 0 4h-2" />, test: (_, name) => /caf|dining|food|lounge/i.test(name) },
+  { id: "pano", label: "360° views", icon: <><ellipse cx="12" cy="12" rx="9" ry="4" /><path d="M12 3a4 9 0 0 1 0 18" /></>, test: (id) => Boolean(ROOM_MEDIA[id]?.panorama) },
+];
+
+const ICONS = {
+  menu: <path d="M4 6h16M4 12h16M4 18h16" />,
+  back: <path d="M19 12H5M11 18l-6-6 6-6" />,
+  close: <path d="M6 6l12 12M18 6 6 18" />,
+  search: <><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></>,
+  directions: <><path d="M12 2 2 12l10 10 10-10z" /><path d="M9 14v-2a2 2 0 0 1 2-2h4" /><path d="m13 8 2 2-2 2" /></>,
+  swap: <path d="M7 4v16M3 8l4-4 4 4M17 20V4M13 16l4 4 4-4" />,
+  list: <path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" />,
+  prev: <path d="M15 18 9 12l6-6" />,
+  next: <path d="m9 18 6-6-6-6" />,
+  start: <path d="m3 11 18-8-8 18-2-8z" />,
+  walk: <><circle cx="13" cy="4" r="1.6" /><path d="m9 21 3-7 3 3v4M7 12l3-4 4 1 3 3" /></>,
+  accessible: <><circle cx="12" cy="4" r="1.6" /><path d="M12 7v6h5l2 5M9 10a6 6 0 1 0 7 8" /></>,
+  upload: <path d="M12 16V4M7 9l5-5 5 5M5 20h14" />,
+  pin: <><path d="M12 22s-7-6.2-7-12a7 7 0 0 1 14 0c0 5.8-7 12-7 12z" /><circle cx="12" cy="10" r="2.5" /></>,
+};
+
+// Frosted glass: every floating card lets the map show through.
+const card = "border border-white/60 bg-white/75 backdrop-blur-md backdrop-saturate-150 shadow-[0_1px_3px_rgba(60,64,67,.25),0_4px_12px_rgba(60,64,67,.12)]";
+const iconButton = "flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[#5f6368] transition hover:bg-black/5";
+const chipClass = "flex h-10 shrink-0 items-center gap-2 rounded-full pr-4 pl-3 text-sm font-medium whitespace-nowrap transition";
+
+type Panel = "results" | "place" | "directions" | "contribute";
+
+function buildingName(id: string) {
+  return BUILDINGS.find((b) => b.id === id)?.name ?? `${id} Building`;
+}
+
+function levelName(level: number) {
+  return level === 0 ? "Concourse" : `Level ${level}`;
+}
+
 export function CampusApp() {
-  const [tab, setTab] = useState<"explore" | "directions" | "upload">("explore");
+  const [panel, setPanel] = useState<Panel | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [sheetExpanded, setSheetExpanded] = useState(false);
   const [buildingId, setBuildingId] = useState<CampusBuildingId | null>(null);
   const [floor, setFloor] = useState<number | null>(null);
   const [query, setQuery] = useState("");
+  const [category, setCategory] = useState<string | null>(null);
   const [selectedRoom, setSelectedRoom] = useState<string | null>(null);
   const [panoramaRoom, setPanoramaRoom] = useState<{ id: string; title: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [panelOpen, setPanelOpen] = useState(true);
 
-  const [panoramasOnly, setPanoramasOnly] = useState(false);
+  // Session is shared by the account button and the Contribute panel.
+  const [user, setUser] = useState<SessionUser | null>(null);
+  const [checkingSession, setCheckingSession] = useState(true);
+  const [sessionError, setSessionError] = useState("");
 
   // Directions state
   const [originQuery, setOriginQuery] = useState("");
@@ -53,11 +100,12 @@ export function CampusApp() {
   const [accessibleOnly, setAccessibleOnly] = useState(false);
   const [activeRoute, setActiveRoute] = useState<RouteResult | null>(null);
   const [activeLegIndex, setActiveLegIndex] = useState<number | null>(null);
+  const [showSteps, setShowSteps] = useState(false);
   const navigating = activeRoute != null && activeLegIndex != null;
   const activeStepRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     activeStepRef.current?.scrollIntoView({ block: "nearest" });
-  }, [activeLegIndex]);
+  }, [activeLegIndex, showSteps]);
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeError, setRouteError] = useState<string | null>(null);
   const [routingGraph, setRoutingGraph] = useState<RoutingGraphData | null>(null);
@@ -77,19 +125,31 @@ export function CampusApp() {
       .catch((err) => { setLocationsError(true); console.warn("Failed to prefetch routing graph:", err); });
   }, []);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/auth/session", { signal: controller.signal, cache: "no-store" })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error(String(response.status))))
+      .then((body: { user: SessionUser | null }) => setUser(body.user))
+      .catch(() => { if (!controller.signal.aborted) setSessionError("Unable to check sign-in. Refresh the page to try again."); })
+      .finally(() => { if (!controller.signal.aborted) setCheckingSession(false); });
+    return () => controller.abort();
+  }, []);
+
   const roomKeys = useMemo(
     () => (routingGraph ? Object.keys(routingGraph.rooms).sort() : []),
     [routingGraph]
   );
 
   const searchTerm = query.trim().toLowerCase();
-  const exploreResults = roomKeys.filter((id) => {
-    const room = routingGraph!.rooms[id];
-    const term = searchTerm;
-    return (!panoramasOnly || Boolean(ROOM_MEDIA[id]?.panorama)) &&
-      (!buildingId || room.building === buildingId) &&
-      (!term || `${id} ${room.name}`.toLowerCase().includes(term));
-  });
+  const activeCategory = CATEGORIES.find((c) => c.id === category);
+  const exploreResults = !searchTerm && !activeCategory
+    ? POPULAR_ROOMS.filter((id) => routingGraph?.rooms[id])
+    : roomKeys.filter((id) => {
+      const room = routingGraph!.rooms[id];
+      return (!activeCategory || activeCategory.test(id, room.name)) &&
+        (!buildingId || room.building === buildingId) &&
+        (!searchTerm || `${id} ${room.name}`.toLowerCase().includes(searchTerm));
+    });
   const selectedDetails = selectedRoom && routingGraph ? resolveRoom(routingGraph, selectedRoom) : null;
   const selectedInfo = selectedDetails ? routingGraph?.rooms[selectedDetails.roomId] : null;
 
@@ -101,14 +161,30 @@ export function CampusApp() {
     setBuildingId(room.building as CampusBuildingId);
     setFloor(room.level);
     setError(null);
+    setPanel("place");
+  }
+
+  function closeSearch() {
+    setQuery("");
+    setCategory(null);
+    setSelectedRoom(null);
+    setError(null);
+    setMenuOpen(false);
+    setPanel(null);
+  }
+
+  function toggleCategory(id: string) {
+    setCategory(category === id ? null : id);
+    setQuery("");
+    setSelectedRoom(null);
+    setPanel(category === id ? null : "results");
   }
 
   const getSuggestions = (queryText: string, isFocused: boolean): RoomSuggestion[] => {
     if (!routingGraph || !isFocused) return [];
     const q = queryText.trim().toUpperCase();
     if (!q) {
-      const popular = ["W305", "E303", "N11007", "W502", "B201", "BTB105"];
-      return popular
+      return POPULAR_ROOMS
         .filter((key) => routingGraph.rooms[key])
         .map((key) => {
           const r = routingGraph.rooms[key];
@@ -196,8 +272,8 @@ export function CampusApp() {
 
     for (let i = 0; i < legs.length; i++) {
       const leg = legs[i];
-      const bName = BUILDINGS.find((b) => b.id === leg.building)?.name ?? `${leg.building} Building`;
-      const levelText = leg.level === 0 ? "Concourse" : `Level ${leg.level}`;
+      const bName = buildingName(leg.building);
+      const levelText = levelName(leg.level);
 
       if (i === 0) {
         steps.push({
@@ -262,21 +338,7 @@ export function CampusApp() {
     return steps;
   }
 
-  const directionMode = tab === "directions" || Boolean(activeRoute);
-
-  const legBuildingName =
-    activeRoute && activeLegIndex != null && activeRoute.legs[activeLegIndex]
-      ? BUILDINGS.find((b) => b.id === activeRoute.legs[activeLegIndex].building)?.name
-      : null;
-
-  const buildingName = BUILDINGS.find((building) => building.id === buildingId)?.name;
-  const levelName = floor === 0 ? "Concourse" : `Level ${floor}`;
-  const mapStatus =
-    floor == null
-      ? "Outdoor"
-      : directionMode && activeRoute && activeLegIndex != null
-        ? `${legBuildingName ?? "All buildings"} · ${levelName} · Leg ${activeLegIndex + 1}`
-        : `${buildingName ?? "All buildings"} · ${levelName}`;
+  const directionMode = panel === "directions" || Boolean(activeRoute);
   const campusLevels = campusLevelsForSelection(buildingId);
 
   function showOutdoor() {
@@ -284,26 +346,22 @@ export function CampusApp() {
     setFloor(null);
     setSelectedRoom(null);
     setError(null);
+    if (panel === "place") setPanel(null);
   }
 
-  function selectBuilding(id: CampusBuildingId) {
+  function selectBuilding(id: CampusBuildingId | null) {
     setBuildingId(id);
-    setFloor((currentFloor) => closestCampusLevel(id, currentFloor ?? 1));
+    setFloor((currentFloor) => id ? closestCampusLevel(id, currentFloor ?? 1) : currentFloor ?? 1);
     setSelectedRoom(null);
     setError(null);
-  }
-
-  function selectAllBuildings() {
-    setBuildingId(null);
-    setFloor((currentFloor) => currentFloor ?? 1);
-    setSelectedRoom(null);
-    setError(null);
+    if (panel === "place") setPanel(null);
   }
 
   function selectFloor(level: number) {
     setFloor(level);
     setSelectedRoom(null);
     setError(null);
+    if (panel === "place") setPanel(null);
   }
 
   function goToQuery() {
@@ -322,6 +380,7 @@ export function CampusApp() {
       setBuildingId(parsed.buildingId);
       setFloor(parsed.floor);
       setSelectedRoom(roomId);
+      setPanel("place");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not find that room");
     }
@@ -399,6 +458,12 @@ export function CampusApp() {
     setRouteError(null);
     setOriginQuery("");
     setDestinationQuery("");
+    setShowSteps(false);
+  }
+
+  function closeDirections() {
+    clearRoute();
+    setPanel(null);
   }
 
   function swapRooms() {
@@ -420,9 +485,15 @@ export function CampusApp() {
     setFloor(leg.level);
   }
 
+  function openDirections() {
+    setMenuOpen(false);
+    setPanel("directions");
+    setBuildingId(null);
+    if (selectedRoom && !originQuery) setOriginQuery(selectedRoom);
+  }
+
   function startDirectionsFrom(roomId: string) {
-    setTab("directions");
-    setPanelOpen(true);
+    setPanel("directions");
     setOriginQuery(roomId);
     if (destinationQuery && destinationQuery !== roomId) {
       calculateRoute(roomId, destinationQuery);
@@ -430,30 +501,33 @@ export function CampusApp() {
   }
 
   function startDirectionsTo(roomId: string) {
-    setTab("directions");
-    setPanelOpen(true);
+    setPanel("directions");
     setDestinationQuery(roomId);
     if (originQuery && originQuery !== roomId) {
       calculateRoute(originQuery, roomId);
     }
   }
 
+  function openContribute() {
+    setMenuOpen(false);
+    setPanel("contribute");
+    setActiveRoute(null);
+    setActiveLegIndex(null);
+    setShowSteps(false);
+  }
+
   function handleMapRoomClick(roomId: string) {
     if (navigating) return;
     setSelectedRoom(roomId);
-    if (tab === "explore") {
+    if (panel !== "directions") {
       setQuery(roomId);
       setError(null);
+      setPanel("place");
+    } else if (!originQuery) {
+      setOriginQuery(roomId);
     } else {
-      if (!originQuery) {
-        setOriginQuery(roomId);
-      } else if (!destinationQuery) {
-        setDestinationQuery(roomId);
-        calculateRoute(originQuery, roomId);
-      } else {
-        setDestinationQuery(roomId);
-        calculateRoute(originQuery, roomId);
-      }
+      setDestinationQuery(roomId);
+      calculateRoute(originQuery, roomId);
     }
   }
 
@@ -463,453 +537,366 @@ export function CampusApp() {
     [activeRoute]
   );
 
+  const legs = activeRoute?.legs ?? [];
+  const routeLevels = [...new Set(legs.map((leg) => leg.level))];
+  const routeMinutes = activeRoute ? Math.max(1, Math.ceil(activeRoute.estimatedSeconds / 60)) : 0;
+  const legSteps = navigating ? directionSteps.filter((step) => step.legIndex === activeLegIndex) : [];
+  const currentStep = legSteps[0];
+  const thenStep = legSteps[1] ?? directionSteps.find((step) => step.legIndex === (activeLegIndex ?? 0) + 1);
+  const lastLeg = navigating && activeLegIndex === legs.length - 1;
+  const legNumber = (activeLegIndex ?? 0) + 1;
+  const panelVisible = navigating ? showSteps : panel != null;
+
+  const categoryChips = (onMap: boolean) => CATEGORIES.map((c) => (
+    <button key={c.id} type="button" aria-pressed={category === c.id} onClick={() => toggleCategory(c.id)} className={`${chipClass} ${category === c.id ? "bg-[#5b238a] text-white" : onMap ? `${card} text-[#3c4043] hover:bg-black/5` : "bg-black/5 text-[#3c4043] hover:bg-black/10"}`}>
+      <Glyph size={18}>{c.icon}</Glyph>{c.label}
+    </button>
+  ));
+
+  const roomRow = (id: string) => {
+    const room = routingGraph?.rooms[id];
+    if (!room) return null;
+    return (
+      <li key={id}>
+        <button type="button" onClick={() => selectExploreRoom(id)} className="flex min-h-16 w-full items-center gap-3.5 px-5 py-2.5 text-left hover:bg-[#5b238a]/10">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#f1eaf7] text-[#5b238a]"><Glyph>{ICONS.pin}</Glyph></span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[15px] font-semibold text-[#1f1f1f]">{id}</span>
+            <span className="block truncate text-[13px] text-[#5f6368]">{room.name !== id ? `${room.name} · ` : ""}{buildingName(room.building)} · {levelName(room.level)}</span>
+          </span>
+          {ROOM_MEDIA[id]?.panorama ? <span className="rounded-full bg-[#f1eaf7] px-2 py-1 text-xs font-semibold text-[#5b238a]">360°</span> : null}
+        </button>
+      </li>
+    );
+  };
+
+  const resultsList = (
+    <div aria-label="Matching locations">
+      <p className="px-5 pt-3 pb-1 text-[13px] font-semibold text-[#5f6368]">
+        {!searchTerm && !activeCategory ? "Popular places" : `Results${buildingId ? ` in ${buildingName(buildingId)}` : ""}`}
+      </p>
+      {!routingGraph ? <p role="status" className="px-5 py-3 text-sm">{locationsError ? "Unable to load locations. Refresh the page to try again." : "Loading locations…"}</p>
+        : exploreResults.length ? <ul>{exploreResults.slice(0, 30).map(roomRow)}</ul>
+        : <p role="status" className="px-5 py-3 text-sm leading-6 text-[#5f6368]">{category === "pano" ? "No 360° locations here yet. Turn off the filter to find rooms and get directions." : "No matching locations. Try another room number or building."}</p>}
+    </div>
+  );
+
+  const stepList = (
+    <ol className="pb-3">
+      {directionSteps.map((step, si) => {
+        const leg = legs[step.legIndex];
+        const header = leg && (si === 0 || directionSteps[si - 1].legIndex !== step.legIndex);
+        const isCurrent = navigating && step.legIndex === activeLegIndex;
+        return (
+          <li key={si}>
+            {header ? <p className="px-6 pt-3.5 pb-1.5 text-xs font-bold tracking-wider text-[#5b238a] uppercase">{buildingName(leg.building)} · {levelName(leg.level)}</p> : null}
+            <button
+              ref={isCurrent && !step.isTransition ? activeStepRef : undefined}
+              type="button"
+              onClick={() => selectLeg(step.legIndex)}
+              aria-current={isCurrent ? "step" : undefined}
+              className={`flex w-full items-start gap-4 px-6 py-3 text-left transition-colors ${step.isTransition ? "bg-[#1a56c4]/10 hover:bg-[#1a56c4]/15" : isCurrent ? "bg-[#5b238a]/10" : "hover:bg-black/5"}`}
+            >
+              {step.isTransition
+                ? <span className="-ml-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#1a56c4] text-white"><WayfindingIcon name={step.icon} size={16} /></span>
+                : <span className={`mt-0.5 shrink-0 ${step.icon === "destination" ? "text-[#5b238a]" : "text-[#5f6368]"}`}><WayfindingIcon name={step.icon} size={20} /></span>}
+              <span className="min-w-0 flex-1">
+                <span className={`block text-[15px] leading-5 ${step.isTransition ? "font-semibold text-[#174ea6]" : "font-medium"}`}>{step.text}</span>
+                {step.isTransition && step.subtext ? <span className="mt-0.5 block text-[13px] text-[#3c4043]">{step.subtext}</span> : null}
+              </span>
+            </button>
+          </li>
+        );
+      })}
+    </ol>
+  );
+
+  function roomField(kind: "origin" | "destination") {
+    const isOrigin = kind === "origin";
+    const value = isOrigin ? originQuery : destinationQuery;
+    const setValue = isOrigin ? setOriginQuery : setDestinationQuery;
+    const focused = isOrigin ? originFocused : destFocused;
+    const setFocused = isOrigin ? setOriginFocused : setDestFocused;
+    const suggestions = isOrigin ? originSuggestions : destSuggestions;
+    const pick = isOrigin ? selectOriginSuggestion : selectDestSuggestion;
+    return (
+      <div className="relative">
+        <input
+          aria-label={isOrigin ? "Start room" : "Destination room"}
+          value={value}
+          onChange={(e) => { setValue(e.target.value); setActiveRoute(null); setActiveLegIndex(null); }}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setTimeout(() => setFocused(false), 200)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              setFocused(false);
+              calculateRoute();
+            }
+          }}
+          placeholder={isOrigin ? "Choose a start room (e.g. W305)" : "Choose a destination (e.g. E303)"}
+          className="h-11 w-full rounded-[10px] bg-black/5 pr-9 pl-3.5 text-[15px] font-medium text-[#1f1f1f] outline-none placeholder:font-normal placeholder:text-[#5f6368] focus:ring-2 focus:ring-[#5b238a]/30"
+        />
+        {value ? (
+          <button type="button" aria-label={isOrigin ? "Clear start room" : "Clear destination"} onClick={() => { setValue(""); setActiveRoute(null); }} className="absolute top-1/2 right-1 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-[#5f6368] hover:bg-black/10">
+            <Glyph size={16}>{ICONS.close}</Glyph>
+          </button>
+        ) : null}
+        {focused && suggestions.length > 0 ? (
+          <div className={`absolute top-full right-0 left-0 z-30 mt-1.5 max-h-60 overflow-y-auto rounded-xl py-1 ${card}`}>
+            <p className="px-3 py-1 text-[11px] font-bold tracking-wider text-[#5f6368] uppercase">
+              {value.trim() ? "Matching locations" : "Popular places"}
+            </p>
+            {suggestions.map((sug) => (
+              <button
+                key={`${kind}-${sug.id}`}
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  pick(sug);
+                }}
+                className="flex min-h-11 w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-sm hover:bg-[#5b238a]/10"
+              >
+                <span className="min-w-0 truncate">
+                  <span className="font-semibold">{sug.id}</span>
+                  {sug.name && sug.name !== sug.id ? <span className="ml-1.5 text-[13px] text-[#5f6368]">{sug.name}</span> : null}
+                </span>
+                <span className="shrink-0 rounded bg-[#f1eaf7] px-1.5 py-0.5 text-[11px] font-semibold text-[#5b238a]">
+                  {sug.building} · L{sug.level === 0 ? "C" : sug.level}
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  const routeTypeButton = (accessible: boolean) => (
+    <button
+      type="button"
+      aria-pressed={accessibleOnly === accessible}
+      onClick={() => {
+        setAccessibleOnly(accessible);
+        if (originQuery && destinationQuery) calculateRoute(originQuery, destinationQuery, accessible);
+      }}
+      className={`flex h-[38px] items-center gap-1.5 rounded-full px-3.5 text-[13px] font-semibold transition ${accessibleOnly === accessible ? "bg-white text-[#5b238a] shadow-[0_1px_2px_rgba(0,0,0,.2)]" : "text-[#3c4043]"}`}
+    >
+      <Glyph size={18}>{accessible ? ICONS.accessible : ICONS.walk}</Glyph>{accessible ? "Step-free" : "Fastest"}
+    </button>
+  );
+
+  const directionsPanel = (
+    <section aria-label="Directions">
+      <div className="flex items-center justify-between pt-2 pr-2 pl-4">
+        <div role="group" aria-label="Route type" className="flex rounded-full bg-black/5 p-[3px]">
+          {routeTypeButton(false)}
+          {routeTypeButton(true)}
+        </div>
+        <button type="button" onClick={closeDirections} aria-label="Close directions" className={iconButton}><Glyph>{ICONS.close}</Glyph></button>
+      </div>
+      <div className="flex items-center gap-3 py-4 pr-2 pl-5">
+        <div aria-hidden="true" className="flex w-5 flex-col items-center gap-1">
+          <span className="h-3.5 w-3.5 rounded-full border-[3px] border-[#1f1f1f]" />
+          <span className="h-6 w-0.5 bg-[repeating-linear-gradient(#9aa0a6_0_3px,transparent_3px_6px)]" />
+          <span className="text-[#5b238a]"><Glyph size={18}>{ICONS.pin}</Glyph></span>
+        </div>
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          {roomField("origin")}
+          {roomField("destination")}
+        </div>
+        <button type="button" onClick={swapRooms} title="Swap start and destination" aria-label="Swap start and destination" className={iconButton}><Glyph>{ICONS.swap}</Glyph></button>
+      </div>
+      {!activeRoute ? (
+        <div className="px-5 pb-4">
+          <button type="button" onClick={() => calculateRoute()} disabled={routeLoading || !originQuery || !destinationQuery} className="min-h-11 w-full rounded-full bg-[#5b238a] text-sm font-semibold text-white transition hover:bg-[#4b1d72] disabled:opacity-50">
+            {routeLoading ? "Calculating…" : "Get directions"}
+          </button>
+        </div>
+      ) : null}
+      {routeError ? <p role="alert" className="mx-5 mb-4 rounded-xl bg-[#fce8e6] p-3 text-[13px] text-[#a50e0e]">{routeError}</p> : null}
+      {activeRoute ? (
+        <>
+          <div className="flex items-center gap-4 border-t-8 border-black/5 px-6 py-4">
+            <div className="min-w-0 flex-1">
+              <p className="text-[22px] font-bold text-[#137333]">{routeMinutes} min <span className="text-[15px] font-medium text-[#5f6368]">· {Math.round(activeRoute.totalDistanceMeters)} m</span></p>
+              <p className="mt-0.5 text-[13px] text-[#5f6368]">{activeRoute.fromRoom} → {activeRoute.toRoom} · {activeRoute.transitions.some((transition) => transition.type === "stairs") ? "Includes stairs" : "Step-free route"}</p>
+            </div>
+            <button type="button" onClick={() => selectLeg(0)} disabled={!activeRoute.legs.length} className="flex h-11 items-center gap-2 rounded-full bg-[#5b238a] px-5 text-[15px] font-semibold text-white hover:bg-[#4b1d72] disabled:opacity-40">
+              <Glyph size={18}>{ICONS.start}</Glyph>Start
+            </button>
+          </div>
+          <div className="border-t border-[#e8eaed]">{stepList}</div>
+        </>
+      ) : null}
+    </section>
+  );
+
+  const signedInInitial = user?.name.trim().charAt(0).toUpperCase() || "?";
+
   return (
-    <div className="relative h-dvh min-h-0 overflow-hidden bg-[#f4f3ef] text-[#41434a]">
+    <div className="relative h-dvh min-h-0 overflow-hidden bg-[#f2f2f0] text-[#1f1f1f]">
       <main className="absolute inset-0">
         <MapView
           buildingId={buildingId}
           floor={floor}
-          panelOpen={panelOpen}
+          panelOpen={panelVisible}
           selectedRoom={selectedRoom}
           onSelectRoom={handleMapRoomClick}
           activeRoute={activeRoute}
           activeLegIndex={activeLegIndex}
           directionMode={directionMode}
         />
-        <div className={`${selectedRoom && tab === "explore" ? "hidden md:block" : ""} pointer-events-none absolute bottom-12 left-3 z-10 max-w-[calc(100%-6rem)] rounded-2xl bg-white/65 px-4 py-3 text-sm font-medium shadow-[0_8px_30px_rgba(39,38,44,0.14)] backdrop-blur-[3px] md:top-5 md:right-24 md:bottom-auto md:left-auto`}>
-          {mapStatus}
-        </div>
       </main>
 
-      {selectedRoom && tab === "explore" ? <RoomCard key={selectedRoom} id={selectedRoom} name={selectedInfo?.name ?? selectedRoom} building={BUILDINGS.find((b) => b.id === (selectedInfo?.building ?? buildingId))?.name ?? "Campus"} level={selectedInfo?.level ?? floor ?? 1} media={ROOM_MEDIA[selectedDetails?.roomId ?? selectedRoom]} onClose={() => { setSelectedRoom(null); setQuery(""); }} onDirections={() => startDirectionsTo(selectedRoom)} onFrom={() => startDirectionsFrom(selectedRoom)} onPanorama={() => setPanoramaRoom({ id: selectedDetails?.roomId ?? selectedRoom, title: selectedInfo?.name ?? selectedRoom })} onUpload={() => { setTab("upload"); setActiveRoute(null); setActiveLegIndex(null); }} /> : null}
+      {/* Fixed corner: bottom-left on desktop, top-left on phones (where guidance needs the full top width). */}
+      <div className={`pointer-events-none absolute top-3 left-3 z-10 items-center rounded-xl px-3 py-2 md:top-auto md:bottom-4 md:left-4 md:flex ${card} ${navigating ? "hidden" : "flex"}`}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/hunter-logo.svg" alt="Hunter College" className="h-7 w-auto md:h-9" />
+      </div>
+
+      {!navigating ? (
+        <div className="absolute top-4 left-[408px] z-20 hidden gap-2 md:flex">{categoryChips(true)}</div>
+      ) : null}
+
+      {!navigating ? (
+        <button type="button" onClick={openContribute} aria-label={user ? `Account and contributions: ${user.name}` : "Sign in to contribute"} className={`absolute top-3 right-3 z-30 flex h-11 items-center justify-center rounded-full text-sm font-semibold text-white shadow-[0_1px_3px_rgba(60,64,67,.3)] md:top-4 md:right-4 ${user ? "w-11 bg-[#7b3fb0]" : "bg-[#5b238a] px-5 hover:bg-[#4b1d72]"}`}>
+          {user ? signedInInitial : "Sign in"}
+        </button>
+      ) : null}
+
+      <LevelControl
+        levels={campusLevels}
+        floor={floor}
+        onSelect={selectFloor}
+        buildingId={buildingId}
+        onSelectBuilding={selectBuilding}
+        onOutdoor={showOutdoor}
+        routeLevels={routeLevels}
+        className={navigating ? "top-[180px] md:top-4" : "top-[68px] md:top-[76px]"}
+      />
 
       {panoramaRoom ? <PanoramaModal key={panoramaRoom.id} locationId={panoramaRoom.id} title={panoramaRoom.title} onClose={() => setPanoramaRoom(null)} /> : null}
 
-      {tab !== "upload" ? <LevelControl levels={campusLevels} floor={floor} onSelect={selectFloor} /> : null}
-
-      {panelOpen ? (
+      {!navigating || showSteps ? (
         <aside
           id="map-controls"
-          style={tab === "upload" ? { maxHeight: "calc(100dvh - 2.5rem)" } : selectedRoom && tab === "explore" ? { maxHeight: "calc(60dvh - 5rem)" } : undefined}
-          className="[&>*]:shrink-0 absolute top-3 right-20 left-3 z-20 flex max-h-[60dvh] flex-col overflow-y-auto rounded-[26px] border border-white/65 bg-white/60 p-4 shadow-[0_18px_55px_rgba(39,38,44,0.17)] backdrop-blur-[3px] md:top-5 md:right-auto md:left-5 md:max-h-[calc(100dvh-2.5rem)] md:w-[340px]"
+          aria-label="Search and places"
+          className={`absolute inset-x-0 bottom-0 z-20 flex flex-col overflow-hidden rounded-t-[20px] border border-white/60 bg-white/75 shadow-[0_-2px_16px_rgba(0,0,0,.18)] backdrop-blur-md backdrop-saturate-150 ${sheetExpanded ? "max-h-[85dvh]" : "max-h-[46dvh]"} md:inset-x-auto md:top-4 md:bottom-auto md:left-4 md:max-h-[calc(100dvh-112px)] md:w-[380px] md:shadow-[0_1px_3px_rgba(60,64,67,.25),0_4px_12px_rgba(60,64,67,.12)] ${panelVisible ? "md:rounded-2xl" : "md:rounded-[24px]"}`}
         >
+          <button type="button" onClick={() => setSheetExpanded(!sheetExpanded)} aria-label={sheetExpanded ? "Collapse panel" : "Expand panel"} aria-expanded={sheetExpanded} className="flex h-6 shrink-0 items-center justify-center md:hidden">
+            <span className="h-[5px] w-9 rounded-full bg-[#c4c7c5]" />
+          </button>
+
           {navigating ? (
-            <header>
-              <button type="button" onClick={() => setActiveLegIndex(null)} className="rounded-lg px-2 py-2 text-sm font-semibold text-[#5b238a]">← Back</button>
-              <h1 className="mt-2 text-base font-semibold text-[#2f3137]">Directions to {activeRoute.toRoom}</h1>
-              <p className="mt-0.5 text-xs text-[#555861]">{Math.max(1, Math.ceil(activeRoute.estimatedSeconds / 60))} minute total</p>
-
-              {/* ── Route progress bar ── */}
-              <div className="mt-3 flex items-center gap-1">
-                <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#10b981]" title="Start" />
-                <div className="flex flex-1 items-center">
-                  {activeRoute.transitions.length === 0 ? (
-                    <div className="h-0.5 flex-1 rounded bg-[#5b238a]" />
-                  ) : (
-                    activeRoute.transitions.map((t, ti) => (
-                      <div key={ti} className="flex flex-1 items-center">
-                        <div className={`h-0.5 flex-1 rounded ${activeLegIndex != null && activeLegIndex > ti ? "bg-[#5b238a]" : "bg-[#d4d0da]"}`} />
-                        <span className={`mx-0.5 flex h-5 w-5 items-center justify-center rounded-full text-[10px] ${activeLegIndex != null && activeLegIndex === ti ? "bg-[#f9cc45] ring-2 ring-[#f59e0b]" : "bg-[#f1edf4]"}`} title={t.description}>
-                          <WayfindingIcon name={t.type} size={13} />
-                        </span>
-                        <div className={`h-0.5 flex-1 rounded ${activeLegIndex != null && activeLegIndex > ti ? "bg-[#5b238a]" : "bg-[#d4d0da]"}`} />
-                      </div>
-                    ))
-                  )}
-                </div>
-                <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#f59e0b]" title="Destination" />
-              </div>
-            </header>
-          ) : <>
-          <header className="relative">
-            <div className="pr-16">
-              <p className="text-sm font-semibold text-[#5b238a]">Hunter College</p>
-              <h1 className="mt-1 text-xl font-semibold tracking-[-0.025em] text-[#2f3137]">
-                Campus wayfinding
-              </h1>
-            </div>
-            <button
-              type="button"
-              onClick={() => setPanelOpen(false)}
-              aria-label="Hide map controls"
-              aria-controls="map-controls"
-              className="absolute top-0 right-0 rounded-full bg-[#f1edf4] px-3 py-1.5 text-xs font-semibold text-[#5b238a] transition hover:bg-[#e8dfee] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5b238a]"
-            >
-              Hide
-            </button>
-          </header>
-
-          {/* Tab switcher */}
-          <div className="mt-4 flex rounded-xl bg-[#f1edf4] p-1 text-xs font-semibold text-[#5b238a]">
-            <button
-              type="button"
-              onClick={() => { setTab("explore"); setActiveRoute(null); setActiveLegIndex(null); }}
-              aria-pressed={tab === "explore"}
-              className={`flex-1 rounded-lg py-1.5 transition focus-visible:outline-2 focus-visible:outline-[#5b238a] ${
-                tab === "explore"
-                  ? "bg-white text-[#4b1d72] shadow-sm"
-                  : "text-[#6c5580] hover:text-[#4b1d72]"
-              }`}
-            >
-              Explore
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setTab("directions");
-                setBuildingId(null);
-                if (selectedRoom && !originQuery) {
-                  setOriginQuery(selectedRoom);
-                  if (destinationQuery && destinationQuery !== selectedRoom) {
-                    calculateRoute(selectedRoom, destinationQuery);
-                  }
-                }
-              }}
-              aria-pressed={tab === "directions"}
-              className={`flex-1 rounded-lg py-1.5 transition focus-visible:outline-2 focus-visible:outline-[#5b238a] ${
-                tab === "directions"
-                  ? "bg-white text-[#4b1d72] shadow-sm"
-                  : "text-[#6c5580] hover:text-[#4b1d72]"
-              }`}
-            >
-              Directions {activeRoute ? "•" : ""}
-            </button>
-            <button type="button" onClick={() => { setTab("upload"); setActiveRoute(null); setActiveLegIndex(null); }} aria-pressed={tab === "upload"} className={`flex-1 rounded-lg py-1.5 transition focus-visible:outline-2 focus-visible:outline-[#5b238a] ${tab === "upload" ? "bg-white text-[#4b1d72] shadow-sm" : "text-[#6c5580] hover:text-[#4b1d72]"}`}>Upload</button>
-          </div>
-
-          </>}
-
-          {tab === "upload" ? <UploadPanel graph={routingGraph} initialLocationId={selectedDetails?.roomId ?? selectedRoom} locationsError={locationsError} /> : tab === "explore" ? (
             <>
-              <label className="mt-4 block text-sm font-medium text-[#4c4f56]" htmlFor="room-search">
-                Search rooms or places
-              </label>
-              <div className="mt-2 flex gap-2">
+              <div className="flex items-center gap-1 border-b border-[#e8eaed] py-2 pr-2 pl-5">
+                <h2 className="flex-1 text-lg font-semibold">Steps to {activeRoute?.toRoom}</h2>
+                <button type="button" onClick={() => setShowSteps(false)} aria-label="Hide steps" className={iconButton}><Glyph>{ICONS.close}</Glyph></button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto">{stepList}</div>
+            </>
+          ) : panel === "directions" ? (
+            <div className="min-h-0 flex-1 overflow-y-auto">{directionsPanel}</div>
+          ) : panel === "contribute" ? (
+            <>
+              <div className="flex items-center gap-1 border-b border-[#e8eaed] py-1 pr-2 pl-1">
+                <button type="button" onClick={() => setPanel(selectedRoom ? "place" : null)} aria-label="Back" className={iconButton}><Glyph>{ICONS.back}</Glyph></button>
+                <h2 className="flex-1 text-lg font-semibold">Contribute</h2>
+                <button type="button" onClick={closeSearch} aria-label="Close" className={iconButton}><Glyph>{ICONS.close}</Glyph></button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <UploadPanel graph={routingGraph} initialLocationId={selectedDetails?.roomId ?? selectedRoom} locationsError={locationsError} user={user} checkingSession={checkingSession} sessionError={sessionError} onUserChange={setUser} />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className={`flex h-12 shrink-0 items-center px-0.5 ${panelVisible ? "md:border-b md:border-[#e8eaed]" : ""}`}>
+                {panel ? (
+                  <button type="button" onClick={closeSearch} aria-label="Back to map" className={iconButton}><Glyph>{ICONS.back}</Glyph></button>
+                ) : (
+                  <button type="button" onClick={() => setMenuOpen(!menuOpen)} aria-label="Open menu" aria-expanded={menuOpen} className={iconButton}><Glyph>{ICONS.menu}</Glyph></button>
+                )}
+                <label htmlFor="room-search" className="sr-only">Search rooms or places</label>
                 <input
                   id="room-search"
                   value={query}
-                  onChange={(event) => setQuery(event.target.value)}
+                  onChange={(event) => { setQuery(event.target.value); setSelectedRoom(null); setPanel("results"); }}
+                  onFocus={() => { setMenuOpen(false); if (!panel) setPanel("results"); setSheetExpanded(true); }}
                   onKeyDown={(event) => event.key === "Enter" && goToQuery()}
-                  className="min-w-0 flex-1 rounded-xl border border-[#dedfe3] bg-white/65 px-3.5 py-2.5 text-sm text-[#2f3137] outline-none transition placeholder:text-[#92959d] focus:border-[#5b238a] focus:ring-2 focus:ring-[#5b238a]/15"
-                  placeholder="Room number or place name"
+                  className="h-full min-w-0 flex-1 bg-transparent px-1 text-[15px] text-[#1f1f1f] outline-none placeholder:text-[#5f6368]"
+                  placeholder="Search rooms, buildings, places"
                 />
-                <button
-                  type="button"
-                  onClick={goToQuery}
-                  className="rounded-xl bg-[#5b238a] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#4b1d72] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5b238a]"
-                >
-                  Go
-                </button>
+                {query || panel ? (
+                  <button type="button" onClick={closeSearch} aria-label="Clear search" className={iconButton}><Glyph>{ICONS.close}</Glyph></button>
+                ) : (
+                  <button type="button" onClick={goToQuery} aria-label="Search" className={iconButton}><Glyph>{ICONS.search}</Glyph></button>
+                )}
+                <span className="h-6 w-px bg-[#dadce0]" />
+                <button type="button" onClick={openDirections} aria-label="Directions" className={`${iconButton} text-[#5b238a]`}><Glyph>{ICONS.directions}</Glyph></button>
               </div>
-              {error ? <p className="mt-2 text-sm text-[#b3261e]">{error}</p> : null}
+              {error ? <p role="alert" className="px-5 pb-2 text-[13px] text-[#b3261e]">{error}</p> : null}
 
-              <button type="button" aria-pressed={panoramasOnly} onClick={() => { setPanoramasOnly(!panoramasOnly); setQuery(""); }} className={`mt-3 w-fit rounded-full border px-3 py-1.5 text-xs font-semibold ${panoramasOnly ? "border-[#5b238a] bg-[#5b238a] text-white" : "border-[#5b238a]/25 bg-white/45 text-[#5b238a]"}`}>
-                360° locations
-              </button>
-              {panoramasOnly || (query.trim() && query !== selectedRoom) ? (
-                <div className="mt-2 max-h-44 overflow-y-auto rounded-xl bg-white/60" aria-label="Matching locations">
-                  {!routingGraph ? <p className="p-3 text-xs">Loading locations…</p> : exploreResults.length ? exploreResults.slice(0, 20).map((id) => (
-                    <button key={id} type="button" onClick={() => selectExploreRoom(id)} className="flex w-full items-center justify-between gap-2 border-b border-[#5b238a]/10 px-3 py-2 text-left text-sm hover:bg-white/70">
-                      <span><span className="font-semibold">{id}</span><span className="ml-2 text-xs">{routingGraph.rooms[id].name !== id ? routingGraph.rooms[id].name : ""}</span></span>
-                      {ROOM_MEDIA[id]?.panorama ? <span className="rounded-full bg-[#5b238a]/10 px-2 py-1 text-xs text-[#5b238a]">360°</span> : null}
-                    </button>
-                  )) : <p role="status" className="p-3 text-xs leading-5">{panoramasOnly ? "No 360° locations here yet. Turn off the filter to find rooms and get directions." : "No matching locations. Try another room number or building."}</p>}
-                </div>
-              ) : null}
-
-              <label htmlFor="building-select" className="mt-4 block text-sm font-semibold">Building</label>
-              <select id="building-select" value={floor == null ? "outdoor" : buildingId ?? "all"} onChange={(event) => {
-                const value = event.target.value;
-                if (value === "outdoor") showOutdoor();
-                else if (value === "all") selectAllBuildings();
-                else selectBuilding(value as CampusBuildingId);
-              }} className="mt-2 w-full rounded-xl border border-[#dedfe3] bg-white/60 px-3 py-2.5 text-sm">
-                <option value="outdoor">Outdoor campus</option>
-                <option value="all">All buildings</option>
-                {BUILDINGS.map((building) => <option key={building.id} value={building.id}>{building.name}</option>)}
-              </select>
-
-
-
-
-            </>
-          ) : (
-            <div className="mt-4 flex flex-col gap-3">
-              {!navigating ? <>
-              {/* Directions inputs */}
-              <div className="relative flex flex-col gap-2 rounded-2xl border border-[#dedfe3] bg-white/50 p-3 shadow-xs">
-                {/* Origin Input */}
-                <div className="relative">
-                  <div className="flex items-center gap-2">
-                    <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#10b981]" title="Start" />
-                    <input
-                      aria-label="Start room"
-                      value={originQuery}
-                      onChange={(e) => { setOriginQuery(e.target.value); setActiveRoute(null); setActiveLegIndex(null); }}
-                      onFocus={() => setOriginFocused(true)}
-                      onBlur={() => setTimeout(() => setOriginFocused(false), 200)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          setOriginFocused(false);
-                          calculateRoute();
-                        }
-                      }}
-                      placeholder="Start room (e.g. W305)"
-                      className="min-w-0 flex-1 bg-transparent text-sm font-medium text-[#2f3137] outline-none placeholder:text-[#92959d]"
-                    />
-                    {originQuery ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setOriginQuery("");
-                          setActiveRoute(null);
-                        }}
-                        className="px-1 text-xs text-[#92959d] hover:text-[#2f3137]"
-                      >
-                        ✕
-                      </button>
-                    ) : null}
-                  </div>
-
-                  {originFocused && originSuggestions.length > 0 ? (
-                    <div className="absolute left-0 right-0 top-full z-30 mt-1.5 max-h-52 overflow-y-auto rounded-xl border border-[#dedfe3] bg-white py-1 shadow-lg">
-                      <p className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-[#92959d]">
-                        {originQuery.trim() ? "Matching Locations" : "Quick suggestions"}
-                      </p>
-                      {originSuggestions.map((sug) => (
-                        <button
-                          key={`orig-${sug.id}`}
-                          type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            selectOriginSuggestion(sug);
-                          }}
-                          className="flex w-full items-center justify-between px-3 py-1.5 text-left text-xs transition hover:bg-[#f1edf4]"
-                        >
-                          <div>
-                            <span className="font-bold text-[#2f3137]">{sug.id}</span>
-                            {sug.name && sug.name !== sug.id ? (
-                              <span className="ml-1.5 text-[11px] text-[#747780]">({sug.name})</span>
-                            ) : null}
-                          </div>
-                          <span className="rounded bg-[#f1edf4] px-1.5 py-0.5 text-[10px] font-semibold text-[#5b238a]">
-                            {sug.building} · L{sug.level === 0 ? "C" : sug.level}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="relative my-0.5 border-t border-[#e8e9ed]">
-                  <button
-                    type="button"
-                    onClick={swapRooms}
-                    title="Swap start and destination"
-                    aria-label="Swap start and destination"
-                    className="absolute top-1/2 right-2 -translate-y-1/2 rounded-full border border-[#dedfe3] bg-white p-1 text-xs text-[#5b238a] shadow-sm transition hover:bg-[#f1edf4]"
-                  >
-                    ⇅
-                  </button>
-                </div>
-
-                {/* Destination Input */}
-                <div className="relative">
-                  <div className="flex items-center gap-2">
-                    <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#f59e0b]" title="Destination" />
-                    <input
-                      aria-label="Destination room"
-                      value={destinationQuery}
-                      onChange={(e) => { setDestinationQuery(e.target.value); setActiveRoute(null); setActiveLegIndex(null); }}
-                      onFocus={() => setDestFocused(true)}
-                      onBlur={() => setTimeout(() => setDestFocused(false), 200)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          setDestFocused(false);
-                          calculateRoute();
-                        }
-                      }}
-                      placeholder="Destination room (e.g. E303)"
-                      className="min-w-0 flex-1 bg-transparent text-sm font-medium text-[#2f3137] outline-none placeholder:text-[#92959d]"
-                    />
-                    {destinationQuery ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setDestinationQuery("");
-                          setActiveRoute(null);
-                        }}
-                        className="px-1 text-xs text-[#92959d] hover:text-[#2f3137]"
-                      >
-                        ✕
-                      </button>
-                    ) : null}
-                  </div>
-
-                  {destFocused && destSuggestions.length > 0 ? (
-                    <div className="absolute left-0 right-0 top-full z-30 mt-1.5 max-h-52 overflow-y-auto rounded-xl border border-[#dedfe3] bg-white py-1 shadow-lg">
-                      <p className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-[#92959d]">
-                        {destinationQuery.trim() ? "Matching Locations" : "Quick suggestions"}
-                      </p>
-                      {destSuggestions.map((sug) => (
-                        <button
-                          key={`dest-${sug.id}`}
-                          type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            selectDestSuggestion(sug);
-                          }}
-                          className="flex w-full items-center justify-between px-3 py-1.5 text-left text-xs transition hover:bg-[#f1edf4]"
-                        >
-                          <div>
-                            <span className="font-bold text-[#2f3137]">{sug.id}</span>
-                            {sug.name && sug.name !== sug.id ? (
-                              <span className="ml-1.5 text-[11px] text-[#747780]">({sug.name})</span>
-                            ) : null}
-                          </div>
-                          <span className="rounded bg-[#f1edf4] px-1.5 py-0.5 text-[10px] font-semibold text-[#5b238a]">
-                            {sug.building} · L{sug.level === 0 ? "C" : sug.level}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-
-              {/* Accessible toggle */}
-              <label className="flex cursor-pointer items-center gap-2.5 px-1 text-xs font-medium text-[#555861]">
-                <input
-                  type="checkbox"
-                  checked={accessibleOnly}
-                  onChange={(e) => {
-                    setAccessibleOnly(e.target.checked);
-                    if (originQuery && destinationQuery) {
-                      calculateRoute(originQuery, destinationQuery, e.target.checked);
-                    }
-                  }}
-                  className="h-4 w-4 rounded border-gray-300 text-[#5b238a] focus:ring-[#5b238a]"
-                />
-                <span>Wheelchair accessible (step-free, avoid stairs)</span>
-              </label>
-
-              {/* Action buttons */}
-              <div className="flex gap-2">
-                {!activeRoute ? <button
-                  type="button"
-                  onClick={() => calculateRoute()}
-                  disabled={routeLoading || !originQuery || !destinationQuery}
-                  className="flex-1 rounded-xl bg-[#5b238a] py-2.5 text-sm font-semibold text-white transition hover:bg-[#4b1d72] disabled:opacity-50"
-                >
-                  {routeLoading ? "Calculating…" : "Get Directions"}
-                </button> : null}
-                {activeRoute || originQuery || destinationQuery ? (
-                  <button
-                    type="button"
-                    onClick={clearRoute}
-                    className="rounded-xl border border-[#dedfe3] bg-white px-3.5 py-2.5 text-xs font-semibold text-[#555861] transition hover:bg-[#f7f8f9]"
-                  >
-                    Clear
-                  </button>
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                {menuOpen ? (
+                  <ul aria-label="Menu" className="border-t border-[#e8eaed] py-1">
+                    <li><button type="button" onClick={openDirections} className="flex min-h-12 w-full items-center gap-4 px-5 text-left text-[15px] hover:bg-[#5b238a]/10"><span className="text-[#5b238a]"><Glyph>{ICONS.directions}</Glyph></span>Directions</button></li>
+                    <li><button type="button" onClick={openContribute} className="flex min-h-12 w-full items-center gap-4 px-5 text-left text-[15px] hover:bg-[#5b238a]/10"><span className="text-[#5b238a]"><Glyph>{ICONS.upload}</Glyph></span>Contribute a 360° photo</button></li>
+                  </ul>
                 ) : null}
+                {panel === "place" && selectedRoom ? (
+                  <RoomCard key={selectedRoom} id={selectedRoom} name={selectedInfo?.name ?? selectedRoom} building={buildingName(selectedInfo?.building ?? buildingId ?? "")} level={selectedInfo?.level ?? floor ?? 1} media={ROOM_MEDIA[selectedDetails?.roomId ?? selectedRoom]} onClose={closeSearch} onDirections={() => startDirectionsTo(selectedRoom)} onFrom={() => startDirectionsFrom(selectedRoom)} onPanorama={() => setPanoramaRoom({ id: selectedDetails?.roomId ?? selectedRoom, title: selectedInfo?.name ?? selectedRoom })} onUpload={openContribute} />
+                ) : (
+                  <div className={panel ? "" : "md:hidden"}>
+                    <div className="flex gap-2 overflow-x-auto px-4 pt-2 pb-1 [scrollbar-width:none] md:hidden">{categoryChips(false)}</div>
+                    {resultsList}
+                  </div>
+                )}
               </div>
-
-              {routeError ? (
-                <div className="rounded-xl border border-[#fca5a5] bg-[#fef2f2] p-3 text-xs text-[#991b1b]">
-                  {routeError}
-                </div>
-              ) : null}
-
-              </> : null}
-
-              {/* Route preview requires an explicit Start before guidance. */}
-              {activeRoute && !navigating ? (
-                <section aria-label="Route preview" className="rounded-2xl border border-[#e5dfeb] bg-white/65 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="font-semibold text-[#2f3137]">{Math.max(1, Math.ceil(activeRoute.estimatedSeconds / 60))} min · {Math.round(activeRoute.totalDistanceMeters)} m</p>
-                    <button type="button" onClick={() => selectLeg(0)} disabled={!activeRoute.legs.length} className="rounded-full bg-[#5b238a] px-5 py-2 text-sm font-semibold text-white hover:bg-[#4b1d72] disabled:opacity-40">Start</button>
-                  </div>
-                  <p className="mt-2 text-xs text-[#555861]">{activeRoute.fromRoom} → {activeRoute.toRoom}</p>
-                  <p className="mt-1 text-xs text-[#555861]">{activeRoute.transitions.some((transition) => transition.type === "stairs") ? "Includes stairs" : "Step-free route"}</p>
-                </section>
-              ) : null}
-
-              {/* ── Mappedin-style turn-by-turn directions ── */}
-              {activeRoute && navigating ? (
-                <section aria-label="Step-by-step directions" className="flex flex-col gap-3">
-                  {/* Origin section header */}
-                  <div className="flex items-center gap-2 px-1">
-                    <span className="inline-block h-2 w-2 rounded-full bg-[#10b981]" />
-                    <span className="text-sm font-bold text-[#2f3137]">{activeRoute.fromRoom}</span>
-                  </div>
-
-                  {/* Step list */}
-                  <ol className="flex flex-col gap-1 overflow-y-auto" style={{ maxHeight: "calc(40dvh - 2rem)" }}>
-                    {directionSteps.map((step, si) => {
-                      const isCurrent = step.legIndex === activeLegIndex;
-                      const isHighlighted = step.isTransition;
-
-                      return (
-                        <li key={si}>
-                          <button
-                            ref={isCurrent && !step.isTransition ? activeStepRef : undefined}
-                            type="button"
-                            onClick={() => selectLeg(step.legIndex)}
-                            aria-current={isCurrent ? "step" : undefined}
-                            className={`flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition-colors ${
-                              isHighlighted
-                                ? "bg-[#f9cc45] text-[#30291a]"
-                                : isCurrent
-                                  ? "bg-[#f1edf4] text-[#2f3137] ring-1 ring-[#5b238a]/20"
-                                  : "bg-white/40 text-[#555861] hover:bg-white/70"
-                            }`}
-                          >
-                            <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-sm" aria-hidden="true">
-                              <WayfindingIcon name={step.icon} size={19} />
-                            </span>
-                            <div className="min-w-0 flex-1">
-                              <span className="block text-sm font-medium leading-5">{step.text}</span>
-                              {step.subtext ? (
-                                <span className={`mt-0.5 block text-xs ${isHighlighted ? "text-[#5e4a1a]" : "text-[#92959d]"}`}>{step.subtext}</span>
-                              ) : null}
-                            </div>
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ol>
-
-                  {/* Destination section header */}
-                  <div className="flex items-center gap-2 px-1">
-                    <span className="inline-block h-2 w-2 rounded-full bg-[#f59e0b]" />
-                    <span className="text-sm font-bold text-[#2f3137]">{activeRoute.toRoom}</span>
-                  </div>
-
-                  {/* Navigation buttons */}
-                  <div className="sticky bottom-0 flex gap-3 rounded-xl bg-white/90 p-2">
-                    <button type="button" onClick={goToPrevStep} disabled={activeLegIndex === 0} className="flex-1 rounded-xl border border-[#dedfe3] px-3 py-2.5 text-sm font-semibold text-[#555861] disabled:opacity-35">←</button>
-                    {activeLegIndex === activeRoute.legs.length - 1 ? (
-                      <button type="button" onClick={() => { clearRoute(); setTab("explore"); }} className="flex-1 rounded-xl bg-[#5b238a] px-3 py-2.5 text-sm font-semibold text-white">Finish</button>
-                    ) : (
-                      <button type="button" onClick={goToNextStep} className="flex-1 rounded-xl bg-[#5b238a] px-3 py-2.5 text-sm font-semibold text-white">→</button>
-                    )}
-                  </div>
-                </section>
-              ) : null}
-            </div>
+            </>
           )}
         </aside>
-      ) : (
-        <button
-          type="button"
-          onClick={() => setPanelOpen(true)}
-          aria-controls="map-controls"
-          aria-expanded={false}
-          className="absolute top-4 left-4 z-20 rounded-full bg-[#5b238a] px-4 py-3 text-sm font-semibold text-white shadow-[0_8px_30px_rgba(39,38,44,0.2)] transition hover:bg-[#4b1d72] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white md:top-5 md:left-5"
-        >
-          Wayfinding controls
-        </button>
-      )}
+      ) : null}
+
+      {navigating && currentStep ? (
+        <section aria-label="Current step" aria-live="polite" className={`absolute inset-x-2.5 top-3 z-30 overflow-hidden rounded-[18px] shadow-[0_4px_16px_rgba(0,0,0,.25)] backdrop-blur-md md:right-auto md:top-4 md:w-[440px] ${showSteps ? "md:left-[408px]" : "md:left-4"}`}>
+          <div className="flex items-center gap-4 bg-[#3d1760]/85 p-4 text-white md:px-5">
+            <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[14px] bg-white/15"><WayfindingIcon name={currentStep.icon} size={30} /></span>
+            <div className="min-w-0">
+              <p className="text-xl leading-tight font-bold md:text-[22px]">{currentStep.text}</p>
+              {currentStep.subtext ? <p className="mt-1 text-sm text-[#e3d6f0]">{currentStep.subtext}</p> : null}
+            </div>
+          </div>
+          {thenStep ? (
+            <p className="flex items-center gap-2.5 bg-[#2a0f45]/85 px-4 py-2.5 text-sm text-[#e3d6f0] md:px-5">
+              <span className="font-semibold text-white">Then</span><WayfindingIcon name={thenStep.icon} size={18} />{thenStep.text}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
+
+      {navigating ? (
+        <section aria-label="Trip summary" className={`absolute inset-x-0 bottom-0 z-30 flex-col gap-3.5 rounded-t-[20px] border border-white/60 bg-white/75 px-4 pt-4 pb-7 shadow-[0_-2px_16px_rgba(0,0,0,.18)] backdrop-blur-md backdrop-saturate-150 md:inset-x-auto md:bottom-6 md:w-[640px] md:flex-row md:items-center md:gap-5 md:rounded-[20px] md:py-3.5 md:pr-4 md:pl-6 md:shadow-[0_1px_3px_rgba(60,64,67,.25),0_4px_12px_rgba(60,64,67,.12)] ${showSteps ? "hidden md:left-[408px] md:flex" : "flex md:left-1/2 md:-translate-x-1/2"}`}>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-3">
+              <p className="min-w-0 flex-1 text-[22px] font-bold text-[#137333]">{routeMinutes} min <span className="text-[15px] font-medium text-[#5f6368]">· {Math.round(activeRoute?.totalDistanceMeters ?? 0)} m · Step {legNumber} of {legs.length}</span></p>
+              <button type="button" onClick={closeDirections} className="h-12 rounded-full bg-[#fce8e6] px-5 text-[15px] font-semibold text-[#a50e0e] md:hidden">End</button>
+            </div>
+            <div aria-hidden="true" className="mt-2.5 flex gap-1">
+              {legs.map((_, index) => <span key={index} className={`h-1 flex-1 rounded-sm ${index < legNumber ? "bg-[#5b238a]" : "bg-[#dadce0]"}`} />)}
+            </div>
+          </div>
+          <div className="flex gap-2.5">
+            <button type="button" onClick={() => setShowSteps(true)} aria-label="Show all steps" className="flex h-12 w-12 items-center justify-center rounded-full border border-[#dadce0] text-[#3c4043]"><Glyph>{ICONS.list}</Glyph></button>
+            <button type="button" onClick={goToPrevStep} disabled={activeLegIndex === 0} aria-label="Previous step" className="flex h-12 w-12 items-center justify-center rounded-full border border-[#dadce0] text-[#3c4043] disabled:opacity-35"><Glyph>{ICONS.prev}</Glyph></button>
+            {lastLeg ? (
+              <button type="button" onClick={closeDirections} className="h-12 flex-1 rounded-full bg-[#5b238a] px-6 text-[15px] font-semibold text-white md:flex-none">Finish</button>
+            ) : (
+              <button type="button" onClick={goToNextStep} aria-label="Next step" className="flex h-12 flex-1 items-center justify-center gap-1.5 rounded-full bg-[#5b238a] px-5 text-[15px] font-semibold text-white md:flex-none">Next<Glyph>{ICONS.next}</Glyph></button>
+            )}
+            <button type="button" onClick={closeDirections} className="hidden h-12 rounded-full bg-[#fce8e6] px-5 text-[15px] font-semibold text-[#a50e0e] md:block">End</button>
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }

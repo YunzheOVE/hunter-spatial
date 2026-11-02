@@ -139,6 +139,22 @@ function bboxOfCoords(coords: [number, number][]): [number, number, number, numb
   return [minX, minY, maxX, maxY];
 }
 
+// Keep camera targets clear of the overlay: left panel on desktop, bottom sheet on phones, floor picker on the right.
+function cameraPadding(map: MapLibreMap, panelOpen: boolean) {
+  const { clientWidth, clientHeight } = map.getContainer();
+  if (clientWidth < 768) return { top: 90, right: 72, bottom: Math.round(clientHeight * 0.45), left: 24 };
+  return panelOpen
+    ? { top: 90, right: 96, bottom: 90, left: 440 }
+    : { top: 150, right: 96, bottom: 120, left: 80 };
+}
+
+function fitRoom(map: MapLibreMap, data: FloorFeature[], roomId: string, panelOpen: boolean) {
+  const room = data.filter((item) => item.properties.kind === "room" && item.properties.roomId === roomId);
+  const box = bboxOfMany(room);
+  if (!box) return;
+  map.fitBounds(box, { padding: cameraPadding(map, panelOpen), pitch: 52, bearing: -20, duration: 750, maxZoom: 19.2 });
+}
+
 function fitFeatures(
   map: MapLibreMap,
   data: FloorFeature[],
@@ -195,13 +211,7 @@ function fitFeatures(
         : data.filter((item) => isVisibleFloor(item, floor, effectiveBuildingId));
   const box = targetBox ?? bboxOfMany(features.length ? features : data);
   if (!box) return;
-  const container = map.getContainer();
-  const desktop = container.clientWidth >= 768;
-  const padding = panelOpen
-    ? desktop
-      ? { top: 90, right: 80, bottom: 90, left: 410 }
-      : { top: Math.min(480, container.clientHeight * 0.54 + 20), right: 36, bottom: 50, left: 36 }
-    : { top: 80, right: 80, bottom: 80, left: 80 };
+  const padding = cameraPadding(map, panelOpen);
 
   const targetMaxZoom = isStepFocus
     ? 19.6 // Zoom closely on the active route corridor so users see turns and doors clearly
@@ -967,8 +977,16 @@ export function MapView({
 
   useEffect(() => {
     const map = mapRef.current;
-    // Exploring changes visible content, never the user's camera position.
-    if (!ready || !map || !directionMode || !activeRoute || activeLegIndex == null) return;
+    // Picking a room brings it into view; route framing below takes over in Directions.
+    if (!ready || !map || !selectedRoom || directionMode) return;
+    fitRoom(map, dataRef.current, selectedRoom, panelOpenRef.current);
+    return () => { map.stop(); };
+  }, [ready, selectedRoom, directionMode]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    // Frame the route on this floor as soon as it is found, then each leg once guidance starts.
+    if (!ready || !map || !directionMode || !activeRoute) return;
     fitFeatures(
       map,
       dataRef.current,

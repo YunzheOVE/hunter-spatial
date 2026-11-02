@@ -4,9 +4,9 @@ import { useState, type FormEvent } from "react";
 import { isCampusEmail } from "@/lib/accountPolicy.mjs";
 import type { SessionUser } from "@/lib/uploads";
 
-const inputClass = "mt-1 w-full rounded-xl border border-[#dedfe3] bg-white/90 px-3 py-2.5 text-sm text-[#2f3137]";
-const primaryClass = "rounded-xl bg-[#5b238a] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#4b1d72] disabled:opacity-50";
-const secondaryClass = "rounded-xl border border-[#5b238a]/30 bg-white/70 px-3 py-2 text-sm font-semibold text-[#5b238a] disabled:opacity-50";
+const inputClass = "mt-1.5 min-h-11 w-full rounded-[10px] border-0 bg-black/5 px-3.5 py-2.5 text-[15px] text-[#1f1f1f]";
+const primaryClass = "min-h-11 rounded-full bg-[#5b238a] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#4b1d72] disabled:opacity-50";
+const secondaryClass = "min-h-11 rounded-full border border-[#d3c3e3] bg-white/70 px-4 py-2 text-sm font-semibold text-[#5b238a] disabled:opacity-50 aria-pressed:border-[#5b238a] aria-pressed:bg-[#f1eaf7]";
 
 export function UserLogin({ onSignIn }: { onSignIn: (user: SessionUser) => void }) {
   const [authMode, setAuthMode] = useState<"sign-in" | "sign-up">("sign-in");
