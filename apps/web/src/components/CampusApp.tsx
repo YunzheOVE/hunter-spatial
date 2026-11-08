@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { RoomCard } from "./RoomCard";
+import { BuildingCard, type CampusEntrance } from "./BuildingCard";
 import { PanoramaModal } from "./PanoramaModal";
 import { UploadPanel } from "./UploadPanel";
 import { LevelControl } from "./LevelControl";
@@ -11,6 +12,7 @@ import type { SessionUser } from "@/lib/uploads";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   campusLevelsForSelection,
+  CAMPUS_TOP_FLOORS,
   type CampusBuildingId,
   closestCampusLevel,
 } from "@/lib/campusLevels";
@@ -66,7 +68,7 @@ const card = "border border-white/60 bg-white/75 backdrop-blur-md backdrop-satur
 const iconButton = "flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[#5f6368] transition hover:bg-black/5";
 const chipClass = "flex h-10 shrink-0 items-center gap-2 rounded-full pr-4 pl-3 text-sm font-medium whitespace-nowrap transition";
 
-type Panel = "results" | "place" | "directions" | "contribute";
+type Panel = "results" | "place" | "building" | "directions" | "contribute";
 
 function buildingName(id: string) {
   return BUILDINGS.find((b) => b.id === id)?.name ?? `${id} Building`;
@@ -89,6 +91,8 @@ export function CampusApp() {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<string | null>(null);
   const [selectedRoom, setSelectedRoom] = useState<string | null>(null);
+  const [pickedBuilding, setPickedBuilding] = useState<CampusBuildingId | null>(null);
+  const [entrances, setEntrances] = useState<CampusEntrance[]>([]);
   const [panoramaRoom, setPanoramaRoom] = useState<{ id: string; title: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -123,6 +127,14 @@ export function CampusApp() {
     level: number;
   };
 
+  useEffect(() => {
+    fetch("/data/campus-entrances.geojson")
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error(String(response.status)))))
+      .then((data: { features: { properties: CampusEntrance }[] }) => setEntrances(data.features.map((feature) => feature.properties)))
+      // The building card says entrances aren't mapped when this fails.
+      .catch(() => {});
+  }, []);
+
   // Prefetch routing graph in the background
   useEffect(() => {
     fetchRoutingGraph()
@@ -144,6 +156,15 @@ export function CampusApp() {
     () => (routingGraph ? Object.keys(routingGraph.rooms).sort() : []),
     [routingGraph]
   );
+  // Notable rooms for the building card: popular picks first, then halls, libraries, cafés and the like.
+  const buildingPlaces = useMemo(() => {
+    if (!pickedBuilding || !routingGraph) return [];
+    const inBuilding = Object.entries(routingGraph.rooms).filter(([, room]) => room.building === pickedBuilding);
+    const popular = inBuilding.filter(([id]) => POPULAR_ROOMS.includes(id));
+    const notable = inBuilding.filter(([id, room]) => !POPULAR_ROOMS.includes(id) && /lecture|hall|library|caf|dining|lounge|theat|auditor|gym|pool|study/i.test(room.name) && !/washroom|restroom|hallway/i.test(room.name));
+    return [...popular, ...notable].slice(0, 5).map(([id, room]) => ({ id, name: room.name, level: room.level }));
+  }, [pickedBuilding, routingGraph]);
+
   // "Building:level" pairs that an elevator stops at, for the place card's step-free row.
   const elevatorFloors = useMemo(() => {
     const floors = new Set<string>();
@@ -172,6 +193,7 @@ export function CampusApp() {
   function selectExploreRoom(id: string) {
     const room = routingGraph?.rooms[id];
     if (!room) return;
+    setPickedBuilding(null);
     setSelectedRoom(id);
     setQuery(id);
     setBuildingId(room.building as CampusBuildingId);
@@ -186,7 +208,22 @@ export function CampusApp() {
     setSelectedRoom(null);
     setError(null);
     setMenuOpen(false);
+    setPickedBuilding(null);
     setPanel(null);
+  }
+
+  function pickBuilding(id: CampusBuildingId) {
+    setPickedBuilding(id);
+    setSelectedRoom(null);
+    setMenuOpen(false);
+    setPanel("building");
+  }
+
+  function goInside(id: CampusBuildingId) {
+    setPickedBuilding(null);
+    setPanel(null);
+    setBuildingId(id);
+    setFloor(closestCampusLevel(id, 1));
   }
 
   function toggleCategory(id: string) {
@@ -369,15 +406,17 @@ export function CampusApp() {
     setBuildingId(id);
     setFloor((currentFloor) => id ? closestCampusLevel(id, currentFloor ?? 1) : currentFloor ?? 1);
     setSelectedRoom(null);
+    setPickedBuilding(null);
     setError(null);
-    if (panel === "place") setPanel(null);
+    if (panel === "place" || panel === "building") setPanel(null);
   }
 
   function selectFloor(level: number) {
     setFloor(level);
     setSelectedRoom(null);
+    setPickedBuilding(null);
     setError(null);
-    if (panel === "place") setPanel(null);
+    if (panel === "place" || panel === "building") setPanel(null);
   }
 
   function goToQuery() {
@@ -761,6 +800,8 @@ export function CampusApp() {
           activeRoute={activeRoute}
           activeLegIndex={activeLegIndex}
           directionMode={directionMode}
+          pickedBuilding={pickedBuilding}
+          onPickBuilding={pickBuilding}
         />
       </main>
 
@@ -859,7 +900,9 @@ export function CampusApp() {
                     <li><button type="button" onClick={openContribute} className="flex min-h-12 w-full items-center gap-4 px-5 text-left text-[15px] hover:bg-[#5b238a]/10"><span className="text-[#5b238a]"><Glyph>{ICONS.upload}</Glyph></span>Contribute a 360° photo</button></li>
                   </ul>
                 ) : null}
-                {panel === "place" && selectedRoom ? (
+                {panel === "building" && pickedBuilding ? (
+                  <BuildingCard key={pickedBuilding} name={buildingName(pickedBuilding)} topFloor={CAMPUS_TOP_FLOORS[pickedBuilding]} entrances={entrances.filter((entrance) => entrance.building === pickedBuilding)} places={buildingPlaces} onGoInside={() => goInside(pickedBuilding)} onSelectPlace={selectExploreRoom} onClose={closeSearch} />
+                ) : panel === "place" && selectedRoom ? (
                   <RoomCard key={selectedRoom} id={selectedRoom} locationId={selectedDetails?.roomId ?? selectedRoom} name={selectedInfo?.name ?? selectedRoom} building={buildingName(selectedInfo?.building ?? buildingId ?? "")} level={selectedInfo?.level ?? floor ?? 1} stepFree={elevatorFloors.has(`${selectedInfo?.building}:${selectedInfo?.level}`)} media={ROOM_MEDIA[selectedDetails?.roomId ?? selectedRoom]} onClose={closeSearch} onDirections={() => startDirectionsTo(selectedRoom)} onFrom={() => startDirectionsFrom(selectedRoom)} onPanorama={() => setPanoramaRoom({ id: selectedDetails?.roomId ?? selectedRoom, title: selectedInfo?.name ?? selectedRoom })} onUpload={openContribute} />
                 ) : (
                   <div className={panel ? "" : "md:hidden"}>

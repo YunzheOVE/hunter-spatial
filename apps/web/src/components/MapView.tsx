@@ -1,9 +1,10 @@
 "use client";
 
-import { LngLat, Map as MapLibreMap, NavigationControl, setWorkerUrl } from "maplibre-gl";
+import { LngLat, Map as MapLibreMap, NavigationControl, Popup, setWorkerUrl } from "maplibre-gl";
+import type { WindowFeature } from "@/lib/mapScene";
 import type { ExpressionSpecification, FilterSpecification, GeoJSONSource, PaddingOptions } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   campusBuildingsAtLevel,
   campusPodiumLevels,
@@ -11,8 +12,23 @@ import {
   type CampusBuildingId,
   STOREY_HEIGHT,
 } from "@/lib/campusLevels";
-import type { RouteResult } from "@/lib/pathfinding";
+import { edgeSeconds, type RouteResult } from "@/lib/pathfinding";
 import { routeArrows, routeToGeoJSON } from "@/lib/routeGeometry";
+import {
+  BASEMAP_COLOR_PROPERTIES,
+  basemapPaint,
+  hunterWindows,
+  LIT_SHARE,
+  sceneStyle,
+  seasonForMonth,
+  timeOfDayForHour,
+  type MassFeature,
+  type Season,
+  type TimeOfDay,
+  type Weather,
+} from "@/lib/mapScene";
+import { SceneControl } from "./SceneControl";
+import { WeatherLayer } from "./WeatherLayer";
 
 setWorkerUrl("/maplibre/maplibre-gl-worker.mjs");
 
@@ -25,6 +41,8 @@ type Props = {
   activeRoute?: RouteResult | null;
   activeLegIndex?: number | null;
   directionMode?: boolean;
+  pickedBuilding?: CampusBuildingId | null;
+  onPickBuilding?: (id: CampusBuildingId) => void;
 };
 
 type FloorProps = {
@@ -277,6 +295,8 @@ const BADGE_ICONS: Record<string, [color: string, icon: string]> = {
   "badge-lounge": ["#b45309", '<path d="M20 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v3M2 16a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5a2 2 0 0 0-4 0v1.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5V11a2 2 0 0 0-4 0zM4 18v2M20 18v2"/>'],
   "badge-entrance": ["#0f766e", '<path d="M13 4h3a2 2 0 0 1 2 2v14M2 20h3M13 20h9M10 12v.01M13 4.56v16.16a1 1 0 0 1-1.24.97L5 20V5.56a2 2 0 0 1 1.52-1.94l4-1A2 2 0 0 1 13 4.56z"/>'],
   "badge-entrance-accessible": ["#1d4ed8", '<circle cx="16" cy="4" r="1"/><path d="m18 19 1-7-6 1M5 8l3-3 5.5 3-2.36 3.5M4.24 14.5a5 5 0 0 0 6.88 6M13.76 17.5a5 5 0 0 0-6.88-6"/>'],
+  "badge-subway": ["#1f2937", '<rect x="5" y="3" width="14" height="14" rx="3"/><path d="M5 11h14M9 21l-2-4M15 21l2-4M9 14h.01M15 14h.01"/>'],
+  "badge-bus": ["#0e7490", '<path d="M6 17V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v12M6 11h12M8 21v-4M16 21v-4M6 17h12M9 14h.01M15 14h.01"/>'],
   "badge-stairs": ["#2563eb", '<path d="M3 21h5v-5h5v-5h5V6h3"/>'],
   "badge-elevator": ["#2563eb", '<rect x="5" y="2" width="14" height="20" rx="2"/><path d="m9 9 3-3 3 3M9 15l3 3 3-3"/>'],
   "badge-restroom-men": ["#2563eb", '<g fill="#fff" stroke="none"><circle cx="12" cy="4.5" r="2.3"/><path d="M9.5 8.5h5a1.5 1.5 0 0 1 1.5 1.5v5.5h-2v6.5h-4v-6.5H8V10a1.5 1.5 0 0 1 1.5-1.5z"/></g>'],
@@ -340,7 +360,6 @@ function roomColor(selectedRoom: string | null): ExpressionSpecification {
 }
 
 const HUNTER_FACADE = "#7446ad";
-const HUNTER_ROOF = "#e2d6f1";
 
 // Basemap (OpenMapTiles) copies of Hunter's own buildings; excluded so they don't z-fight with the campus masses.
 // shortcut: ids found by matching basemap footprints to hunter-floors.geojson masses; recheck if the basemap or campus data changes.
@@ -356,6 +375,30 @@ function prefersReducedMotion() {
 }
 
 const NO_FEATURE: FilterSpecification = ["==", ["get", "id"], ""];
+
+type BasemapLayer = { id: string; type: string };
+
+/** Recolors the basemap for the scene, remembering the original colors so clear daylight can restore them. */
+function paintBasemap(map: MapLibreMap, layers: BasemapLayer[], time: TimeOfDay, weather: Weather, season: Season, originals: Map<string, unknown>) {
+  for (const { id, type } of layers) {
+    if (!map.getLayer(id)) continue;
+    const colors = new Map(basemapPaint(id, type, time, weather, season));
+    for (const property of BASEMAP_COLOR_PROPERTIES[type] ?? []) {
+      const key = `${id}|${property}`;
+      const color = colors.get(property);
+      if (color && !originals.has(key)) originals.set(key, map.getPaintProperty(id, property));
+      if (color) map.setPaintProperty(id, property, color);
+      else if (originals.has(key)) map.setPaintProperty(id, property, originals.get(key) as string | ExpressionSpecification | undefined);
+    }
+  }
+}
+
+const BUILDING_LIFT_M = 6;
+const INTRO_KEY = "hunter-map-intro-seen";
+
+function liftFor(building: string | null, lift: number): ExpressionSpecification {
+  return ["case", ["==", ["get", "building"], building ?? ""], lift, 0];
+}
 
 function hideBasemapExtrusions(map: MapLibreMap) {
   for (const layer of map.getStyle().layers ?? []) {
@@ -393,7 +436,7 @@ function setMode(
     }
   }
   // Neighbors would hide floor plates indoors, so the city context is outdoor-only.
-  for (const id of ["campus-flat", "building-labels", "campus-entrances", "hunter-mass", "hunter-roofs", "context-buildings"]) {
+  for (const id of ["campus-flat", "building-labels", "campus-entrances", "hunter-mass", "hunter-roofs", "context-buildings", "transit-stops", "transit-link"]) {
     if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", indoor ? "none" : "visible");
   }
 
@@ -423,8 +466,6 @@ function setMode(
 
   if (!indoor) {
     map.setFilter("hunter-mass", ["==", ["get", "kind"], "mass"]);
-    map.setPaintProperty("hunter-mass", "fill-extrusion-base", 0);
-    map.setPaintProperty("hunter-mass", "fill-extrusion-height", ["get", "height"]);
     map.setPaintProperty("hunter-mass", "fill-extrusion-color", HUNTER_FACADE);
     if (map.getLayer("campus-room-labels")) map.setFilter("campus-room-labels", ["==", ["get", "id"], ""]);
     if (map.getLayer("route-ribbons")) map.setFilter("route-ribbons", ["==", ["get", "id"], ""]);
@@ -473,6 +514,8 @@ export function MapView({
   activeRoute,
   activeLegIndex,
   directionMode = false,
+  pickedBuilding = null,
+  onPickBuilding,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -485,10 +528,21 @@ export function MapView({
   const directionModeRef = useRef(directionMode);
   const dataRef = useRef<FloorFeature[]>([]);
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const windowsRef = useRef<WindowFeature[]>([]);
+  const basemapLayersRef = useRef<BasemapLayer[]>([]);
+  const basemapOriginalsRef = useRef(new Map<string, unknown>());
+  const [time, setTime] = useState<TimeOfDay>(() => timeOfDayForHour(new Date().getHours()));
+  const [weather, setWeather] = useState<Weather>("clear");
+  const [season, setSeason] = useState<Season>(() => seasonForMonth(new Date().getMonth()));
+  const outdoor = floor == null;
+  // Indoors stays in clear daylight so floor plans keep their colors.
+  const scene = useMemo(() => sceneStyle(outdoor ? time : "day", outdoor ? weather : "clear"), [outdoor, time, weather]);
   const shownFloorRef = useRef(floor);
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState("Loading campus map…");
   onSelectRoomRef.current = onSelectRoom;
+  const onPickBuildingRef = useRef(onPickBuilding);
+  onPickBuildingRef.current = onPickBuilding;
   floorRef.current = floor;
   panelOpenRef.current = panelOpen;
   buildingIdRef.current = buildingId;
@@ -520,17 +574,7 @@ export function MapView({
       if (cancelled || map.getSource("floors")) return;
       try {
         hideBasemapExtrusions(map);
-        // Soft afternoon light and a pale sky at the horizon when the camera tilts.
-        map.setLight({ anchor: "map", position: [1.3, 210, 35], color: "#ffffff", intensity: 0.42 });
-        map.setSky({
-          "sky-color": "#c3d7ee",
-          "horizon-color": "#eef1f4",
-          "fog-color": "#f2f2f0",
-          "sky-horizon-blend": 0.6,
-          "horizon-fog-blend": 0.8,
-          "fog-ground-blend": 0.9,
-          "atmosphere-blend": 0,
-        });
+        basemapLayersRef.current = (map.getStyle().layers ?? []).filter((layer) => layer.type !== "fill-extrusion").map(({ id, type }) => ({ id, type }));
         await Promise.all([registerCustomBadges(map), registerRouteMarkerIcons(map)]);
         if (cancelled) return;
         const response = await fetch("/data/hunter-floors.geojson?v=10");
@@ -561,7 +605,7 @@ export function MapView({
               "fill-extrusion-color": "#e6e3dd",
               "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0],
               "fill-extrusion-height": ["coalesce", ["get", "render_height"], 10],
-              "fill-extrusion-opacity": 0.92,
+              "fill-extrusion-opacity": 0.5,
               "fill-extrusion-vertical-gradient": true,
             },
           });
@@ -586,9 +630,33 @@ export function MapView({
           source: "floors",
           filter: ["==", ["get", "kind"], "mass"],
           paint: {
-            "fill-extrusion-color": HUNTER_ROOF,
+            "fill-extrusion-color": "#e2d6f1",
             "fill-extrusion-base": ["get", "height"],
             "fill-extrusion-height": ["+", ["get", "height"], 0.6],
+            "fill-extrusion-opacity": 1,
+            "fill-extrusion-vertical-gradient": false,
+          },
+        });
+        // Night view: square windows on every facade, each lit or dark (feature-state "level" fades them).
+        const masses = (data.features as FloorFeature[]).filter((feature) => feature.properties.kind === "mass") as unknown as MassFeature[];
+        const markers = await fetch("/data/campus-markers.geojson?v=11").then((res) => (res.ok ? res.json() : { features: [] })).catch(() => ({ features: [] }));
+        const classrooms: Record<string, number> = {};
+        for (const { properties: marker } of markers.features as { properties: { category?: string; building: string; level: number } }[]) {
+          if (marker.category === "classroom") classrooms[`${marker.building}:${marker.level}`] = (classrooms[`${marker.building}:${marker.level}`] ?? 0) + 1;
+        }
+        if (cancelled) return;
+        const windows = hunterWindows(masses, classrooms);
+        windowsRef.current = windows.features;
+        map.addSource("hunter-windows", { type: "geojson", data: windows });
+        map.addLayer({
+          id: "hunter-windows",
+          type: "fill-extrusion",
+          source: "hunter-windows",
+          layout: { visibility: "none" },
+          paint: {
+            "fill-extrusion-color": ["interpolate", ["linear"], ["coalesce", ["feature-state", "level"], ["get", "lit"]], 0, "#2a1f45", 1, ["match", ["get", "glow"], "bright", "#ffd98c", "warm", "#ffc977", "#f4b765"]],
+            "fill-extrusion-base": ["get", "base"],
+            "fill-extrusion-height": ["get", "height"],
             "fill-extrusion-opacity": 1,
             "fill-extrusion-vertical-gradient": false,
           },
@@ -606,6 +674,8 @@ export function MapView({
             "fill-extrusion-vertical-gradient": true,
           },
         });
+        // See-through neighbors must draw after Hunter's buildings, or they hide them instead of letting them show through.
+        if (map.getLayer("context-buildings")) map.moveLayer("context-buildings");
         map.addLayer({
           id: "stacked-podiums",
           type: "fill-extrusion",
@@ -894,7 +964,9 @@ export function MapView({
           },
         });
         // Street entrances, outdoors only. Accessible ones use the wheelchair badge.
-        map.addSource("campus-entrances", { type: "geojson", data: "/data/campus-entrances.geojson" });
+        const entrances = await fetch("/data/campus-entrances.geojson").then((res) => (res.ok ? res.json() : { type: "FeatureCollection", features: [] })).catch(() => ({ type: "FeatureCollection", features: [] }));
+        if (cancelled) return;
+        map.addSource("campus-entrances", { type: "geojson", data: entrances });
         map.addLayer({
           id: "campus-entrances",
           type: "symbol",
@@ -916,7 +988,74 @@ export function MapView({
             "text-halo-width": 2,
           },
         });
+        // Subway entrances, stations and bus stops from OpenStreetMap, outdoors only.
+        if (map.getSource("openmaptiles")) {
+          map.addSource("transit-link", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+          map.addLayer({
+            id: "transit-link",
+            type: "line",
+            source: "transit-link",
+            layout: { "line-cap": "round" },
+            paint: { "line-color": "#5b238a", "line-width": 3, "line-dasharray": [1, 1.5] },
+          });
+          map.addLayer({
+            id: "transit-stops",
+            type: "symbol",
+            source: "openmaptiles",
+            "source-layer": "poi",
+            minzoom: 16,
+            filter: ["any", ["==", ["get", "subclass"], "subway_entrance"], ["all", ["==", ["get", "class"], "railway"], ["==", ["get", "subclass"], "station"]], ["==", ["get", "subclass"], "bus_stop"]],
+            layout: {
+              "icon-image": ["case", ["==", ["get", "subclass"], "bus_stop"], "badge-bus", "badge-subway"],
+              "icon-size": 0.75,
+              "icon-allow-overlap": true,
+              "text-field": ["case", ["==", ["get", "subclass"], "station"], ["coalesce", ["get", "name"], ""], ""],
+              "text-size": 11,
+              "text-anchor": "top",
+              "text-offset": [0, 1.2],
+              "text-optional": true,
+            },
+            paint: { "text-color": "#1f2937", "text-halo-color": "#ffffff", "text-halo-width": 2 },
+          });
+          // Tapping a stop links it to the nearest Hunter entrance with a dashed line and a walking time.
+          let transitPopup: Popup | null = null;
+          map.on("click", "transit-stops", (event) => {
+            const stop = event.features?.[0];
+            if (!stop || stop.geometry.type !== "Point") return;
+            const from = new LngLat(...(stop.geometry.coordinates as [number, number]));
+            const nearest = (entrances.features as { geometry: { coordinates: [number, number] }; properties: { name: string } }[])
+              .map((entrance) => ({ entrance, meters: from.distanceTo(new LngLat(...entrance.geometry.coordinates)) }))
+              .sort((a, b) => a.meters - b.meters)[0];
+            const name = String(stop.properties?.name ?? (stop.properties?.subclass === "bus_stop" ? "Bus stop" : "Subway entrance"));
+            transitPopup?.remove();
+            if (!nearest) return;
+            const minutes = Math.max(1, Math.round(edgeSeconds("walk", nearest.meters, 0, 0) / 60));
+            (map.getSource("transit-link") as GeoJSONSource).setData({
+              type: "Feature",
+              geometry: { type: "LineString", coordinates: [from.toArray(), nearest.entrance.geometry.coordinates] },
+              properties: {},
+            });
+            transitPopup = new Popup({ offset: 14, className: "transit-popup", maxWidth: "240px" })
+              .setLngLat(from)
+              .setText(`${name}: ${Math.round(nearest.meters)} m to ${nearest.entrance.properties.name}, about ${minutes} min walk`)
+              .addTo(map);
+            transitPopup.on("close", () => (map.getSource("transit-link") as GeoJSONSource | undefined)?.setData({ type: "FeatureCollection", features: [] }));
+          });
+          map.on("mouseenter", "transit-stops", () => { map.getCanvas().style.cursor = "pointer"; });
+          map.on("mouseleave", "transit-stops", () => { map.getCanvas().style.cursor = ""; });
+        }
         setMode(map, floorRef.current, buildingIdRef.current, directionModeRef.current);
+        // Outdoors, tapping one of Hunter's buildings opens its card (stops and entrances on top win).
+        for (const layer of ["hunter-mass", "hunter-windows"]) {
+          map.on("click", layer, (event) => {
+            const onTop = ["transit-stops", "campus-entrances"].filter((id) => map.getLayer(id));
+            if (onTop.length && map.queryRenderedFeatures(event.point, { layers: onTop }).length) return;
+            const building = String(event.features?.[0]?.properties?.building ?? "");
+            if (isCampusBuildingId(building)) onPickBuildingRef.current?.(building);
+          });
+          map.on("mouseenter", layer, () => { map.getCanvas().style.cursor = "pointer"; });
+          map.on("mouseleave", layer, () => { map.getCanvas().style.cursor = ""; });
+        }
         map.on("click", "rooms", (event) => {
           const roomId = event.features?.[0]?.properties?.roomId;
           if (roomId) onSelectRoomRef.current(String(roomId));
@@ -971,6 +1110,19 @@ export function MapView({
         setStatus("");
         setReady(true);
         if (rootRef.current) rootRef.current.dataset.ready = "1";
+        // A slow sweep onto campus, only on a student's first visit; any drag or zoom stops it.
+        let seen = true;
+        try {
+          seen = localStorage.getItem(INTRO_KEY) === "1";
+          localStorage.setItem(INTRO_KEY, "1");
+        } catch {
+          // Without storage we can't tell a first visit, so skip the intro rather than replay it daily.
+        }
+        if (!seen && floorRef.current == null && !prefersReducedMotion()) {
+          const end = { center: map.getCenter(), zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() };
+          map.jumpTo({ zoom: end.zoom - 1.8, pitch: 30, bearing: end.bearing - 140 });
+          map.easeTo({ ...end, duration: 5000, easing: (t) => 1 - (1 - t) ** 3 });
+        }
       } catch (err) {
         setStatus(err instanceof Error ? err.message : "Could not load campus map");
       }
@@ -1032,6 +1184,76 @@ export function MapView({
     });
     return () => cancelAnimationFrame(frame);
   }, [ready, floor, buildingId, directionMode]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return;
+    map.setLight({ anchor: "map", ...scene.light });
+    map.setSky(scene.sky);
+    if (map.getLayer("context-buildings")) {
+      map.setPaintProperty("context-buildings", "fill-extrusion-color", scene.neighbors);
+      map.setPaintProperty("context-buildings", "fill-extrusion-opacity", scene.neighborOpacity);
+    }
+    map.setPaintProperty("hunter-roofs", "fill-extrusion-color", scene.roof);
+    // setMode colors the masses and bridges for the current mode; repaint them for the scene outdoors.
+    if (outdoor) {
+      // The tapped building is drawn a shade lighter so it stands out as well as rising.
+      map.setPaintProperty("hunter-mass", "fill-extrusion-color", ["case", ["==", ["get", "building"], pickedBuilding ?? ""], "#9a6ad6", scene.facade]);
+      map.setPaintProperty("hunter-bridges", "fill-extrusion-color", scene.facade);
+    }
+    map.setLayoutProperty("hunter-windows", "visibility", outdoor && scene.litWindows ? "visible" : "none");
+    paintBasemap(map, basemapLayersRef.current, outdoor ? time : "day", outdoor ? weather : "clear", season, basemapOriginalsRef.current);
+  }, [ready, scene, outdoor, time, weather, season, buildingId, directionMode, pickedBuilding]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return;
+    // The tapped building rises a few meters, easing up over about 0.3 s.
+    const apply = (lift: number) => {
+      const raise = liftFor(pickedBuilding, lift);
+      map.setPaintProperty("hunter-mass", "fill-extrusion-base", raise);
+      map.setPaintProperty("hunter-mass", "fill-extrusion-height", ["+", ["get", "height"], raise]);
+      map.setPaintProperty("hunter-roofs", "fill-extrusion-base", ["+", ["get", "height"], raise]);
+      map.setPaintProperty("hunter-roofs", "fill-extrusion-height", ["+", ["get", "height"], 0.6, raise]);
+      map.setPaintProperty("hunter-windows", "fill-extrusion-base", ["+", ["get", "base"], raise]);
+      map.setPaintProperty("hunter-windows", "fill-extrusion-height", ["+", ["get", "height"], raise]);
+    };
+    if (!pickedBuilding || prefersReducedMotion()) {
+      apply(pickedBuilding ? BUILDING_LIFT_M : 0);
+      return;
+    }
+    let frame = 0;
+    const start = performance.now();
+    const rise = (now: number) => {
+      const t = Math.min(1, (now - start) / 300);
+      apply(BUILDING_LIFT_M * (1 - (1 - t) ** 3));
+      if (t < 1) frame = requestAnimationFrame(rise);
+    };
+    frame = requestAnimationFrame(rise);
+    return () => cancelAnimationFrame(frame);
+  }, [ready, pickedBuilding]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const windows = windowsRef.current;
+    if (!ready || !map || !outdoor || !scene.litWindows || !windows.length || prefersReducedMotion()) return;
+    // Every 200 ms a few windows decide whether to be lit (busier floors more often) and fade there over ~2.5 s.
+    const levels = windows.map((window) => window.properties.lit);
+    const fading = new Map<number, number>();
+    const timer = window.setInterval(() => {
+      for (let i = 0; i < 4; i++) {
+        const window = windows[Math.floor(Math.random() * windows.length)];
+        const target = Math.random() < LIT_SHARE[window.properties.glow] ? 1 : 0;
+        if (target !== levels[window.id] && !fading.has(window.id)) fading.set(window.id, target);
+      }
+      for (const [id, target] of fading) {
+        levels[id] = Math.min(1, Math.max(0, levels[id] + (target ? 0.08 : -0.08)));
+        map.setFeatureState({ source: "hunter-windows", id }, { level: levels[id] });
+        if (levels[id] === target) fading.delete(id);
+      }
+    }, 200);
+    return () => window.clearInterval(timer);
+  }, [ready, outdoor, scene.litWindows]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1116,6 +1338,11 @@ export function MapView({
   return (
     <div className="relative h-full min-h-0 w-full">
       <div ref={rootRef} className="h-full min-h-0 w-full" />
+      {outdoor && scene.overlay.length ? <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ background: scene.overlay.join(", ") }} /> : null}
+      {outdoor ? <WeatherLayer weather={weather} night={time === "night"} /> : null}
+      {outdoor && ready ? (
+        <SceneControl time={time} weather={weather} season={season} onTime={setTime} onWeather={setWeather} onSeason={setSeason} className="absolute bottom-[calc(46dvh+12px)] left-3 z-20 md:bottom-4 md:left-1/2 md:-translate-x-1/2" />
+      ) : null}
       <div
         ref={tooltipRef}
         hidden

@@ -71,8 +71,8 @@ export function LevelControl({ levels, floor, onSelect, buildingId = null, onSel
       {onOutdoor ? (
         <>
           <span className="mx-auto my-1 block h-px w-8 bg-[#e8eaed]" />
-          <button type="button" aria-label="Outdoor campus" aria-pressed={floor == null} onClick={onOutdoor} className={`${buttonStyle} w-full ${floor == null ? "bg-[#5b238a] text-white" : "text-[#3c4043] hover:bg-black/5"}`}>
-            <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3 5 13h4l-3 5h12l-3-5h4z" /><path d="M12 18v3" /></svg>
+          <button type="button" aria-label="Outdoor campus" aria-pressed={floor == null} title="Outdoor view" onClick={onOutdoor} className={`${buttonStyle} w-full ${floor == null ? "bg-[#5b238a] text-white" : "text-[#3c4043] hover:bg-black/5"}`}>
+            <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 21h18M5 21V8l5-3v16M10 21V3l9 4v14M14 9h2M14 13h2M14 17h2" /></svg>
           </button>
         </>
       ) : null}

@@ -10,7 +10,7 @@ const circleBase = "flex h-12 w-12 items-center justify-center rounded-full bord
 const circleClass = `${circleBase} border-[#d3c3e3] bg-white/70`;
 const pillClass = "absolute bottom-4 left-4 flex h-9 items-center gap-1.5 rounded-full bg-white px-3.5 text-[13px] font-semibold text-[#1f1f1f] shadow-[0_1px_3px_rgba(0,0,0,.3)] hover:bg-[#f8f5fb]";
 const tileClass = "h-[84px] w-28 shrink-0 overflow-hidden rounded-[10px]";
-const CAMPUS_ADDRESS = "695 Park Ave, New York, NY 10065";
+export const CAMPUS_ADDRESS = "695 Park Ave, New York, NY 10065";
 
 const panoramaIcon = <Glyph><ellipse cx="12" cy="12" rx="9" ry="4" /><path d="M12 3a4 9 0 0 1 0 18" /></Glyph>;
 
