@@ -1,5 +1,7 @@
 export type SessionUser = { id: number; name: string; email: string; role: "uploader" | "reviewer" };
 
+export type ReviewSubmission = Pick<Submission, "id" | "locationId" | "uploadedAt" | "imageUrl" | "haov" | "vaov" | "vOffset"> & { uploaderName: string };
+
 export type Submission = {
   id: number;
   locationId: string;

@@ -6,6 +6,7 @@ import type { PanoramaSource } from "@/lib/panorama";
 import { coverageError, panoramaFileError, panoramaDimensionsError, type SessionUser, type Submission } from "@/lib/uploads";
 import { PanoramaPreviewModal } from "./PanoramaDialog";
 import { UserLogin } from "./UserLogin";
+import { ReviewerPanel } from "./ReviewerPanel";
 
 const inputClass = "mt-1 w-full rounded-xl border border-[#dedfe3] bg-white/90 px-3 py-2.5 text-sm text-[#2f3137]";
 const primaryClass = "rounded-xl bg-[#5b238a] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#4b1d72] disabled:opacity-50";
@@ -128,6 +129,7 @@ export function UploadPanel({ graph, initialLocationId, locationsError }: { grap
     <div><h2 className="text-base font-bold text-[#2f3137]">Share a campus panorama</h2><p className="mt-1 text-xs leading-5 text-[#555861]">Choose a location and submit your panorama for review.</p></div>
     {checkingSession ? <p role="status">Checking sign-in…</p> : !user ? <UserLogin onSignIn={(signedInUser) => { setUser(signedInUser); setError(""); setNotice(""); }} /> : <>
       <div className="flex items-center justify-between gap-2 rounded-xl bg-white/70 p-3"><p className="min-w-0 break-words text-xs">Signed in as <strong>{user.name}</strong></p><button type="button" className="shrink-0 text-xs font-semibold text-[#5b238a] underline" onClick={signOut} disabled={busy}>Sign out</button></div>
+      {user.role === "reviewer" ? <ReviewerPanel graph={graph} onSessionExpired={() => { setUser(null); clearFile(); }} /> : null}
       <form onSubmit={submit} className="space-y-3">
         <fieldset disabled={busy} className="min-w-0 space-y-3">
           <div><label className="block" htmlFor="upload-location-search">Find a room or location</label><input id="upload-location-search" type="search" value={search} onChange={(event) => { setSearch(event.target.value); setLocationId(""); }} className={inputClass} placeholder="Search room, name, or building" /></div>

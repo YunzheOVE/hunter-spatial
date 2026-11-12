@@ -127,13 +127,15 @@ Earlier approvals remain stored. Pending and rejected submissions cannot displac
 
 **Checkpoint:** Users can submit persistent pending images associated with existing locations.
 
-## Phase 4 — Reviewer approval (planned)
+## Phase 4 — Reviewer approval (implemented)
 
 - Add a reviewer-only queue with location details and modal previews.
 - Allow one approval or rejection per submission.
 - Derive reviewer identity from the session and record decision time on the server.
 - Update only pending submissions, recording `approved` or `rejected`, reviewer ID, and UTC review time. Require exactly one updated row so a decision cannot be repeated. No rejection explanation is collected in this MVP.
 - Retain submission history and files.
+- Show **Review submissions** inside the Upload tab only for reviewers, keeping uploads and My submissions available. List oldest pending submissions first with uploader, location/building/floor, date, and coverage; include preview, Approve, Reject, and manual Refresh controls.
+- Protect `GET /api/reviews` and `POST /api/reviews/[id]` using the session's database role. Decision bodies contain `{ decision: "approved" | "rejected" }`; missing records return 404 and previously reviewed records return 409, refreshing the queue.
 
 **Checkpoint:** Approval publishes an image; rejection preserves the previous displayed image. Unauthorized or repeated decisions fail.
 

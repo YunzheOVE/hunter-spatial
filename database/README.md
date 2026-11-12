@@ -124,6 +124,19 @@ paths. Missing login returns 401, invalid uploads return 400, and oversized
 requests/files return 413. State-changing endpoints reject cross-origin browser
 requests. All account and submission responses are uncached.
 
+## Reviewer endpoints
+
+- `GET /api/reviews`: reviewer-only pending queue, oldest first, including uploader
+  name, location, upload time, coverage, and protected image URL.
+- `POST /api/reviews/<id>`: reviewer-only JSON `{ "decision": "approved" }` or
+  `{ "decision": "rejected" }`. Updates only pending records and records the
+  session's reviewer ID and server UTC timestamp. Returns 404 for missing records
+  and 409 for an existing decision. Missing sessions return 401; uploaders receive
+  403. Responses are uncached and decisions use the same-origin check.
+
+The Upload tab shows reviewers a queue with previews, Approve/Reject, and manual
+Refresh. Files and history are retained; decisions cannot be undone in this MVP.
+
 ## Read endpoints
 
 - `GET /api/panoramas?locationId=N304`: latest approved metadata or JSON `null`.
@@ -146,6 +159,6 @@ a static export or a serverless storage setup. Stop the server and copy the whol
 
 The committed `fixtures/example.webp` is copied from panorama-test's existing
 example for reproducible local setup; it is not campus location evidence.
-Reviewer decisions and runtime panorama badges/filtering are subsequent phases.
+Reviewer decisions are implemented; runtime panorama badges/filtering remain a subsequent phase.
 The existing static media catalog remains unchanged until the final map integration
 phase. This local MVP has no registration email service or production hosting setup.

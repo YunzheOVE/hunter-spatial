@@ -11,6 +11,7 @@ import { MAX_PANORAMA_BYTES } from "../src/lib/uploads";
 import { checkSameOrigin, readLimitedBody } from "./http";
 import { isCampusEmail, REVIEWER_EMAIL } from "../src/lib/accountPolicy.mjs";
 import { ensureReviewer, REVIEWER_DEMO_PASSWORD } from "./reviewer-seed.mjs";
+import { handleReviews } from "./reviews";
 
 let directory: string;
 let database: ReturnType<typeof store.openPanoramaDatabase>;
@@ -52,6 +53,64 @@ function form(overrides: Record<string, string | File> = {}) {
   for (const [key, value] of Object.entries(overrides)) data.set(key, value);
   return data;
 }
+
+describe("review decisions", () => {
+  async function setup() {
+    const uploader = await signUp();
+    const reviewerId = ensureReviewer(database);
+    const response = await handleAuth(authRequest("sign-in", { email: REVIEWER_EMAIL, password: REVIEWER_DEMO_PASSWORD }), "sign-in");
+    const cookie = response.headers.get("set-cookie")!.split(";")[0];
+    const submission = await saveSubmission(database, form(), uploader.user.id, directory);
+    return { uploader, reviewerId, cookie, submission };
+  }
+  function request(cookie: string, decision?: unknown, origin?: string) {
+    return new Request(`${baseUrl}/api/reviews`, { method: decision === undefined ? "GET" : "POST", headers: { Cookie: cookie, ...(origin ? { Origin: origin } : {}) }, ...(decision === undefined ? {} : { body: JSON.stringify({ decision }) }) });
+  }
+  it("restricts listing and decisions to reviewers and lists oldest pending first", async () => {
+    const { uploader, cookie, submission } = await setup();
+    expect((await handleReviews(request(""))).status).toBe(401);
+    expect((await handleReviews(request("", "approved"), String(submission.id))).status).toBe(401);
+    expect((await handleReviews(request(uploader.cookie))).status).toBe(403);
+    expect((await handleReviews(request(uploader.cookie, "approved"), String(submission.id))).status).toBe(403);
+    const second = await saveSubmission(database, form(), uploader.user.id, directory);
+    const queue = await (await handleReviews(request(cookie))).json();
+    expect(queue.submissions.map((s: { id: number }) => s.id)).toEqual([submission.id, second.id]);
+    expect(queue.submissions[0].uploaderName).toBe("Student");
+    expect(queue.submissions[0]).not.toHaveProperty("file_path");
+  });
+  it("records a single decision, publishes approvals, and preserves the approved image after rejection", async () => {
+    const { uploader, reviewerId, cookie, submission } = await setup();
+    expect((await handleReviews(request(cookie, "approved"), String(submission.id))).status).toBe(200);
+    const row = database.prepare("SELECT * FROM panoramas WHERE id = ?").get(submission.id)!;
+    expect(row.reviewed_by).toBe(reviewerId);
+    expect(row.reviewed_at).toBeTruthy();
+    expect(store.findApprovedPanorama(database, "N304")?.id).toBe(submission.id);
+    expect((await handleReviews(request(cookie, "rejected"), String(submission.id))).status).toBe(409);
+    const second = await saveSubmission(database, form(), uploader.user.id, directory);
+    expect((await handleReviews(request(cookie, "rejected"), String(second.id))).status).toBe(200);
+    expect(store.findApprovedPanorama(database, "N304")?.id).toBe(submission.id);
+    expect((await (await handleReviews(request(cookie))).json()).submissions).toEqual([]);
+  });
+  it("rejects invalid decisions, IDs, missing records, and cross-origin decisions", async () => {
+    const { cookie, submission } = await setup();
+    expect((await handleReviews(request(cookie, "other"), String(submission.id))).status).toBe(400);
+    expect((await handleReviews(request(cookie, "approved"), "bad")).status).toBe(400);
+    expect((await handleReviews(request(cookie, "approved"), "999999")).status).toBe(404);
+    expect((await handleReviews(request(cookie, "approved", "https://elsewhere.example"), String(submission.id))).status).toBe(403);
+    expect((await handleReviews(new Request(`${baseUrl}/api/reviews`, { method: "POST", headers: { Cookie: cookie }, body: "broken" }), String(submission.id))).status).toBe(400);
+  });
+  it("accepts only one competing decision and makes the next approval the current panorama", async () => {
+    const { uploader, cookie, submission } = await setup();
+    const responses = await Promise.all([
+      handleReviews(request(cookie, "approved"), String(submission.id)),
+      handleReviews(request(cookie, "rejected"), String(submission.id)),
+    ]);
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+    const next = await saveSubmission(database, form(), uploader.user.id, directory);
+    expect((await handleReviews(request(cookie, "approved"), String(next.id))).status).toBe(200);
+    expect(store.findApprovedPanorama(database, "N304")?.id).toBe(next.id);
+  });
+});
 
 describe("simple account and session flow", () => {
   it("hashes passwords one way with a unique salt and verifies without JWT", async () => {
