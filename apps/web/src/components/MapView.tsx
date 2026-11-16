@@ -41,6 +41,8 @@ type Props = {
   activeRoute?: RouteResult | null;
   activeLegIndex?: number | null;
   directionMode?: boolean;
+  /** Tour: after framing the route, fly in to the selected room. */
+  zoomToSelected?: boolean;
   pickedBuilding?: CampusBuildingId | null;
   onPickBuilding?: (id: CampusBuildingId) => void;
 };
@@ -206,11 +208,37 @@ function fitElevated(
   });
 }
 
-function fitRoom(map: MapLibreMap, data: FloorFeature[], roomId: string, level: number | null, panelOpen: boolean) {
+// Where a point `heightMeters` up appears on the ground plane for the current camera tilt and heading (see fitElevated).
+function liftedOnGround(map: MapLibreMap, [lng, lat]: [number, number], heightMeters: number): [number, number] {
+  const forward = heightMeters * Math.tan((map.getPitch() * Math.PI) / 180);
+  const heading = (map.getBearing() * Math.PI) / 180;
+  return [
+    lng + (forward * Math.sin(heading)) / (METERS_PER_DEGREE * Math.cos((lat * Math.PI) / 180)),
+    lat + (forward * Math.cos(heading)) / METERS_PER_DEGREE,
+  ];
+}
+
+function fitRoom(map: MapLibreMap, data: FloorFeature[], roomId: string, level: number | null, panelOpen: boolean, maxZoom = 19.2) {
   const room = data.filter((item) => item.properties.kind === "room" && item.properties.roomId === roomId && item.properties.level === level);
   const box = bboxOfMany(room);
   if (!box) return;
-  fitElevated(map, box, room[0].properties.base ?? 0, 52, cameraPadding(map, panelOpen), 19.2);
+  const height = room[0].properties.base ?? 0;
+  const padding = cameraPadding(map, panelOpen);
+  const target = map.cameraForBounds(box, { padding, pitch: 52, bearing: CAMERA_BEARING, maxZoom });
+  // Like Apple Maps: once the user is already this close, keep their zoom, tilt and heading; pan only if the room is out of view.
+  if (target?.zoom !== undefined && map.getZoom() >= target.zoom - 0.5) {
+    // If the room's middle is already in the area the panels leave clear, stay put; otherwise pan only until it is
+    // just inside that area, so a big or edge room never drags the camera far away.
+    const { clientWidth: width, clientHeight: viewHeight } = map.getContainer();
+    const middle = map.project(liftedOnGround(map, [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2], height));
+    const inset = 60;
+    const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), Math.max(min, max));
+    const x = clamp(middle.x, padding.left + inset, width - padding.right - inset);
+    const y = clamp(middle.y, padding.top + inset, viewHeight - padding.bottom - inset);
+    if (x !== middle.x || y !== middle.y) map.panBy([middle.x - x, middle.y - y], { duration: 400 });
+    return;
+  }
+  fitElevated(map, box, height, 52, padding, maxZoom);
 }
 
 function fitFeatures(
@@ -277,7 +305,7 @@ function fitFeatures(
   const targetMaxZoom = isStepFocus
     ? 19.6 // Zoom closely on the active route corridor so users see turns and doors clearly
     : activeRoute
-      ? 18.5
+      ? 19.3 // Short routes (one corridor) still fill the view; padding keeps long ones from cropping.
       : indoor
         ? 18.2
         : 16.7;
@@ -298,6 +326,7 @@ const BADGE_ICONS: Record<string, [color: string, icon: string]> = {
   "badge-subway": ["#1f2937", '<rect x="5" y="3" width="14" height="14" rx="3"/><path d="M5 11h14M9 21l-2-4M15 21l2-4M9 14h.01M15 14h.01"/>'],
   "badge-bus": ["#0e7490", '<path d="M6 17V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v12M6 11h12M8 21v-4M16 21v-4M6 17h12M9 14h.01M15 14h.01"/>'],
   "badge-stairs": ["#2563eb", '<path d="M3 21h5v-5h5v-5h5V6h3"/>'],
+  "badge-escalator": ["#2563eb", '<path d="M3 19h4l10-12h4"/><circle cx="10" cy="7" r="1.5"/><path d="M9 11v3"/>'],
   "badge-elevator": ["#2563eb", '<rect x="5" y="2" width="14" height="20" rx="2"/><path d="m9 9 3-3 3 3M9 15l3 3 3-3"/>'],
   "badge-restroom-men": ["#2563eb", '<g fill="#fff" stroke="none"><circle cx="12" cy="4.5" r="2.3"/><path d="M9.5 8.5h5a1.5 1.5 0 0 1 1.5 1.5v5.5h-2v6.5h-4v-6.5H8V10a1.5 1.5 0 0 1 1.5-1.5z"/></g>'],
   "badge-restroom-women": ["#ec4899", '<g fill="#fff" stroke="none"><circle cx="12" cy="4.5" r="2.3"/><path d="M10 8.5h4l3 8h-3v5.5h-4v-5.5H7z"/></g>'],
@@ -350,12 +379,28 @@ async function registerRouteMarkerIcons(map: MapLibreMap) {
   }
 }
 
-function roomColor(selectedRoom: string | null): ExpressionSpecification {
+/** Scales a color expression's RGB, so night floor plans keep each room's hue but read dark. */
+function dim(color: ExpressionSpecification | string, factor: number): ExpressionSpecification {
+  const rgba = ["to-rgba", color] as ExpressionSpecification;
+  return ["rgba", ["*", ["at", 0, rgba], factor], ["*", ["at", 1, rgba], factor], ["*", ["at", 2, rgba], factor], ["at", 3, rgba]];
+}
+
+// Indoor layer colors by day, and how far each is darkened at night.
+const INDOOR_COLORS: Record<string, [day: ExpressionSpecification | string, night: number]> = {
+  "stacked-podiums": ["#d2d0ca", 0.35],
+  "floor-plate": [["coalesce", ["get", "color"], "#e6e6e6"], 0.3],
+  hallways: [["coalesce", ["get", "color"], "#cdd6e0"], 0.4],
+  "room-outlines": [["coalesce", ["get", "color"], "#848994"], 0.55],
+  walls: [["coalesce", ["get", "color"], "#74777d"], 0.6],
+};
+
+function roomColor(selectedRoom: string | null, night = false): ExpressionSpecification {
+  const base: ExpressionSpecification = ["coalesce", ["get", "color"], "#ffffff"];
   return [
     "case",
     ["==", ["get", "roomId"], selectedRoom ?? ""],
     "#10b981",
-    ["coalesce", ["get", "color"], "#ffffff"],
+    night ? dim(base, 0.45) : base,
   ];
 }
 
@@ -514,6 +559,7 @@ export function MapView({
   activeRoute,
   activeLegIndex,
   directionMode = false,
+  zoomToSelected = false,
   pickedBuilding = null,
   onPickBuilding,
 }: Props) {
@@ -535,8 +581,10 @@ export function MapView({
   const [weather, setWeather] = useState<Weather>("clear");
   const [season, setSeason] = useState<Season>(() => seasonForMonth(new Date().getMonth()));
   const outdoor = floor == null;
-  // Indoors stays in clear daylight so floor plans keep their colors.
-  const scene = useMemo(() => sceneStyle(outdoor ? time : "day", outdoor ? weather : "clear"), [outdoor, time, weather]);
+  // Indoors follows the outdoor time only for night, so floor plans keep their daylight colors otherwise.
+  const night = time === "night";
+  const sceneTime: TimeOfDay = outdoor ? time : night ? "night" : "day";
+  const scene = useMemo(() => sceneStyle(sceneTime, outdoor ? weather : "clear"), [sceneTime, outdoor, weather]);
   const shownFloorRef = useRef(floor);
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState("Loading campus map…");
@@ -639,7 +687,7 @@ export function MapView({
         });
         // Night view: square windows on every facade, each lit or dark (feature-state "level" fades them).
         const masses = (data.features as FloorFeature[]).filter((feature) => feature.properties.kind === "mass") as unknown as MassFeature[];
-        const markers = await fetch("/data/campus-markers.geojson?v=11").then((res) => (res.ok ? res.json() : { features: [] })).catch(() => ({ features: [] }));
+        const markers = await fetch("/data/campus-markers.geojson?v=12").then((res) => (res.ok ? res.json() : { features: [] })).catch(() => ({ features: [] }));
         const classrooms: Record<string, number> = {};
         for (const { properties: marker } of markers.features as { properties: { category?: string; building: string; level: number } }[]) {
           if (marker.category === "classroom") classrooms[`${marker.building}:${marker.level}`] = (classrooms[`${marker.building}:${marker.level}`] ?? 0) + 1;
@@ -682,7 +730,7 @@ export function MapView({
           source: "floors",
           filter: stackedPodiumFilter(floorRef.current, buildingIdRef.current),
           paint: {
-            "fill-extrusion-color": "#d2d0ca",
+            "fill-extrusion-color": INDOOR_COLORS["stacked-podiums"][0],
             "fill-extrusion-base": ["get", "base"],
             "fill-extrusion-height": ["+", ["get", "base"], STOREY_HEIGHT],
             "fill-extrusion-opacity": 1,
@@ -695,7 +743,7 @@ export function MapView({
           source: "floors",
           filter: indoorFilter("floor", floorRef.current, buildingIdRef.current),
           paint: {
-            "fill-extrusion-color": ["coalesce", ["get", "color"], "#e6e6e6"],
+            "fill-extrusion-color": INDOOR_COLORS["floor-plate"][0],
             "fill-extrusion-base": ["get", "base"],
             "fill-extrusion-height": ["get", "height"],
             "fill-extrusion-opacity": 1,
@@ -708,7 +756,7 @@ export function MapView({
           source: "floors",
           filter: indoorFilter("hallway", floorRef.current, buildingIdRef.current),
           paint: {
-            "fill-extrusion-color": ["coalesce", ["get", "color"], "#cdd6e0"],
+            "fill-extrusion-color": INDOOR_COLORS.hallways[0],
             "fill-extrusion-base": ["get", "base"],
             "fill-extrusion-height": ["get", "height"],
             "fill-extrusion-opacity": 1,
@@ -734,7 +782,7 @@ export function MapView({
           source: "floors",
           filter: indoorFilter("room-outline", floorRef.current, buildingIdRef.current),
           paint: {
-            "fill-extrusion-color": ["coalesce", ["get", "color"], "#848994"],
+            "fill-extrusion-color": INDOOR_COLORS["room-outlines"][0],
             "fill-extrusion-base": ["get", "base"],
             "fill-extrusion-height": ["get", "height"],
             "fill-extrusion-opacity": 1,
@@ -747,7 +795,7 @@ export function MapView({
           source: "floors",
           filter: indoorFilter("wall", floorRef.current, buildingIdRef.current),
           paint: {
-            "fill-extrusion-color": ["coalesce", ["get", "color"], "#74777d"],
+            "fill-extrusion-color": INDOOR_COLORS.walls[0],
             "fill-extrusion-base": ["get", "base"],
             "fill-extrusion-height": ["get", "height"],
             "fill-extrusion-opacity": 1,
@@ -797,7 +845,7 @@ export function MapView({
         });
         map.addSource("campus-markers", {
           type: "geojson",
-          data: "/data/campus-markers.geojson?v=11",
+          data: "/data/campus-markers.geojson?v=12",
         });
         map.addLayer({
           id: "campus-room-labels",
@@ -1145,6 +1193,8 @@ export function MapView({
       observer.disconnect();
       map.remove();
       mapRef.current = null;
+      // A remount (e.g. hot reload) builds a new map; effects must wait for it to load again.
+      setReady(false);
     };
   }, []);
 
@@ -1202,8 +1252,18 @@ export function MapView({
       map.setPaintProperty("hunter-bridges", "fill-extrusion-color", scene.facade);
     }
     map.setLayoutProperty("hunter-windows", "visibility", outdoor && scene.litWindows ? "visible" : "none");
-    paintBasemap(map, basemapLayersRef.current, outdoor ? time : "day", outdoor ? weather : "clear", season, basemapOriginalsRef.current);
-  }, [ready, scene, outdoor, time, weather, season, buildingId, directionMode, pickedBuilding]);
+    paintBasemap(map, basemapLayersRef.current, sceneTime, outdoor ? weather : "clear", season, basemapOriginalsRef.current);
+  }, [ready, scene, outdoor, sceneTime, weather, season, buildingId, directionMode, pickedBuilding]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return;
+    for (const [id, [day, nightDim]] of Object.entries(INDOOR_COLORS)) {
+      if (map.getLayer(id)) map.setPaintProperty(id, "fill-extrusion-color", night ? dim(day, nightDim) : day);
+    }
+    map.setPaintProperty("campus-room-labels", "text-color", night ? "#e5e7eb" : "#1e293b");
+    map.setPaintProperty("campus-room-labels", "text-halo-color", night ? "#111827" : "#ffffff");
+  }, [ready, night]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1258,7 +1318,7 @@ export function MapView({
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map?.getLayer("rooms")) return;
-    map.setPaintProperty("rooms", "fill-extrusion-color", roomColor(selectedRoom));
+    map.setPaintProperty("rooms", "fill-extrusion-color", roomColor(selectedRoom, night));
     map.setFilter("room-selected-glow", selectedRoomFilter(selectedRoom, floorRef.current));
     map.setFilter("room-selected-beam", selectedRoomFilter(selectedRoom, floorRef.current));
     map.setFilter("room-selected-label", selectedRoomFilter(selectedRoom, floorRef.current));
@@ -1277,7 +1337,7 @@ export function MapView({
     };
     frame = requestAnimationFrame(pulse);
     return () => cancelAnimationFrame(frame);
-  }, [ready, selectedRoom]);
+  }, [ready, selectedRoom, night]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1335,13 +1395,31 @@ export function MapView({
     return () => { map.stop(); };
   }, [ready, activeRoute, activeLegIndex, directionMode]);
 
+  useEffect(() => {
+    const map = mapRef.current;
+    // Tour: show the whole walk first (framed above), then zoom in on the stop's room.
+    if (!ready || !map || !zoomToSelected || !selectedRoom || !activeRoute) return;
+    const timer = window.setTimeout(() => fitRoom(map, dataRef.current, selectedRoom, floorRef.current, panelOpenRef.current, 20.3), 2000);
+    return () => window.clearTimeout(timer);
+  }, [ready, zoomToSelected, selectedRoom, activeRoute]);
+
   return (
     <div className="relative h-full min-h-0 w-full">
       <div ref={rootRef} className="h-full min-h-0 w-full" />
       {outdoor && scene.overlay.length ? <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ background: scene.overlay.join(", ") }} /> : null}
       {outdoor ? <WeatherLayer weather={weather} night={time === "night"} /> : null}
-      {outdoor && ready ? (
-        <SceneControl time={time} weather={weather} season={season} onTime={setTime} onWeather={setWeather} onSeason={setSeason} className="absolute bottom-[calc(46dvh+12px)] left-3 z-20 md:bottom-4 md:left-1/2 md:-translate-x-1/2" />
+      {ready ? (
+        <SceneControl
+          time={time}
+          weather={weather}
+          season={season}
+          onTime={setTime}
+          onWeather={setWeather}
+          onSeason={setSeason}
+          dayNightOnly={!outdoor}
+          // Step-by-step guidance hides the sheet and shows the trip summary at the bottom instead.
+          className={`absolute left-3 z-20 transition-[bottom] md:left-1/2 md:-translate-x-1/2 ${activeLegIndex != null ? "bottom-[220px] md:bottom-28" : "bottom-[calc(min(var(--sheet-h,46dvh),70dvh)+12px)] md:bottom-4"}`}
+        />
       ) : null}
       <div
         ref={tooltipRef}

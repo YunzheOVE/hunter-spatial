@@ -9,7 +9,7 @@ import { LevelControl } from "./LevelControl";
 import { Glyph, WayfindingIcon, type WayfindingIconName } from "./WayfindingIcon";
 import { ROOM_MEDIA } from "@/lib/roomMedia";
 import type { SessionUser } from "@/lib/uploads";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   campusLevelsForSelection,
   CAMPUS_TOP_FLOORS,
@@ -25,6 +25,7 @@ import {
   type RouteResult,
   type RoutingGraphData,
 } from "@/lib/pathfinding";
+import { TOUR_STOPS, tourGraph } from "@/lib/tour";
 
 const MapView = dynamic(() => import("./MapView").then((module) => module.MapView), { ssr: false });
 
@@ -61,14 +62,21 @@ const ICONS = {
   accessible: <><circle cx="12" cy="4" r="1.6" /><path d="M12 7v6h5l2 5M9 10a6 6 0 1 0 7 8" /></>,
   upload: <path d="M12 16V4M7 9l5-5 5 5M5 20h14" />,
   pin: <><path d="M12 22s-7-6.2-7-12a7 7 0 0 1 14 0c0 5.8-7 12-7 12z" /><circle cx="12" cy="10" r="2.5" /></>,
+  flag: <path d="M4 22V4M4 4h13l-2 4 2 4H4" />,
 };
 
+const MAIN_TOUR_STOPS = TOUR_STOPS.filter((stop) => !stop.optional);
+
 // Frosted glass: every floating card lets the map show through.
-const card = "border border-white/60 bg-white/75 backdrop-blur-md backdrop-saturate-150 shadow-[0_1px_3px_rgba(60,64,67,.25),0_4px_12px_rgba(60,64,67,.12)]";
+const card = "border border-white/60 bg-white/60 backdrop-blur-md backdrop-saturate-150 shadow-[0_1px_3px_rgba(60,64,67,.25),0_4px_12px_rgba(60,64,67,.12)]";
+// Handle (24px) + search row (48px) + border = the minimized sheet.
+const SHEET_MIN = 74;
+const SHEET_STORAGE_KEY = "hunter-spatial:sheet-height";
+const clampSheet = (height: number) => Math.round(Math.max(SHEET_MIN, Math.min(height, window.innerHeight - 64)));
 const iconButton = "flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[#5f6368] transition hover:bg-black/5";
 const chipClass = "flex h-10 shrink-0 items-center gap-2 rounded-full pr-4 pl-3 text-sm font-medium whitespace-nowrap transition";
 
-type Panel = "results" | "place" | "building" | "directions" | "contribute";
+type Panel = "results" | "place" | "building" | "directions" | "contribute" | "tour";
 
 function buildingName(id: string) {
   return BUILDINGS.find((b) => b.id === id)?.name ?? `${id} Building`;
@@ -85,7 +93,29 @@ function transitionTime(seconds: number) {
 export function CampusApp() {
   const [panel, setPanel] = useState<Panel | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [sheetExpanded, setSheetExpanded] = useState(false);
+  // Phone bottom sheet height in px, dragged by the user and remembered; null = default 46dvh, SHEET_MIN = only the search bar.
+  const [sheetHeight, setSheetHeight] = useState<number | null>(null);
+  const [sheetDragging, setSheetDragging] = useState(false);
+  const sheetRef = useRef<HTMLElement>(null);
+  const sheetDrag = useRef<{ y: number; height: number; moved: boolean } | null>(null);
+  const sheetJustDragged = useRef(false);
+  const sheetOpenHeight = useRef<number | null>(null);
+  const sheetMinimized = sheetHeight === SHEET_MIN;
+  const saveSheetHeight = (height: number | null) => {
+    setSheetHeight(height);
+    if (height !== SHEET_MIN) sheetOpenHeight.current = height;
+    try { localStorage.setItem(SHEET_STORAGE_KEY, height == null ? "" : String(height)); } catch { /* storage blocked: size just isn't remembered */ }
+  };
+  const restoreSheet = () => { if (sheetMinimized) saveSheetHeight(sheetOpenHeight.current); };
+  useEffect(() => {
+    let stored: string | null = null;
+    try { stored = localStorage.getItem(SHEET_STORAGE_KEY); } catch { /* storage blocked */ }
+    const height = Number(stored);
+    if (stored && Number.isFinite(height)) {
+      setSheetHeight(clampSheet(height));
+      if (clampSheet(height) !== SHEET_MIN) sheetOpenHeight.current = clampSheet(height);
+    }
+  }, []);
   const [buildingId, setBuildingId] = useState<CampusBuildingId | null>(null);
   const [floor, setFloor] = useState<number | null>(null);
   const [query, setQuery] = useState("");
@@ -93,6 +123,7 @@ export function CampusApp() {
   const [selectedRoom, setSelectedRoom] = useState<string | null>(null);
   const [pickedBuilding, setPickedBuilding] = useState<CampusBuildingId | null>(null);
   const [entrances, setEntrances] = useState<CampusEntrance[]>([]);
+  const [tourIndex, setTourIndex] = useState(0);
   const [panoramaRoom, setPanoramaRoom] = useState<{ id: string; title: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -563,6 +594,33 @@ export function CampusApp() {
     }
   }
 
+  // Each stop draws the indoor walk from the stop the user is leaving.
+  function goToTourStop(index: number) {
+    if (!routingGraph) return;
+    const graph = tourGraph(routingGraph);
+    const stop = TOUR_STOPS[index];
+    const room = graph.rooms[stop.roomId];
+    const from = panel === "tour" && index !== tourIndex ? TOUR_STOPS[tourIndex] : null;
+    const route = from ? findRoute(graph, from.roomId, stop.roomId, { accessibleOnly }) : null;
+    setMenuOpen(false);
+    setPickedBuilding(null);
+    setPanel("tour");
+    setTourIndex(index);
+    setActiveRoute(route);
+    setActiveLegIndex(null);
+    setShowSteps(false);
+    setBuildingId(route ? null : room.building as CampusBuildingId);
+    setFloor(room.level);
+    setSelectedRoom(stop.roomId);
+  }
+
+  function closeTour() {
+    setActiveRoute(null);
+    setActiveLegIndex(null);
+    setSelectedRoom(null);
+    setPanel(null);
+  }
+
   function openContribute() {
     setMenuOpen(false);
     setPanel("contribute");
@@ -572,7 +630,7 @@ export function CampusApp() {
   }
 
   function handleMapRoomClick(roomId: string) {
-    if (navigating) return;
+    if (navigating || panel === "tour") return;
     setSelectedRoom(roomId);
     if (panel !== "directions") {
       setQuery(roomId);
@@ -601,6 +659,12 @@ export function CampusApp() {
   const lastLeg = navigating && activeLegIndex === legs.length - 1;
   const legNumber = (activeLegIndex ?? 0) + 1;
   const panelVisible = navigating ? showSteps : panel != null;
+  // A newly opened card or place should be visible even if the sheet was minimized.
+  const [shownFor, setShownFor] = useState({ panel, selectedRoom });
+  if (shownFor.panel !== panel || shownFor.selectedRoom !== selectedRoom) {
+    setShownFor({ panel, selectedRoom });
+    if (panel) restoreSheet();
+  }
 
   const categoryChips = (onMap: boolean) => CATEGORIES.map((c) => (
     <button key={c.id} type="button" aria-pressed={category === c.id} onClick={() => toggleCategory(c.id)} className={`${chipClass} ${category === c.id ? "bg-[#5b238a] text-white" : onMap ? `${card} text-[#3c4043] hover:bg-black/5` : "bg-black/5 text-[#3c4043] hover:bg-black/10"}`}>
@@ -627,6 +691,16 @@ export function CampusApp() {
 
   const resultsList = (
     <div aria-label="Matching locations">
+      {!searchTerm && !activeCategory && routingGraph ? (
+        <button type="button" onClick={() => goToTourStop(0)} className="mx-4 mt-3 flex w-[calc(100%-2rem)] items-center gap-3.5 rounded-2xl bg-[#5b238a] px-4 py-3 text-left text-white hover:bg-[#4b1d72]">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/15"><Glyph>{ICONS.flag}</Glyph></span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[15px] font-semibold">Take the first-week tour</span>
+            <span className="block text-[13px] text-white/80">{MAIN_TOUR_STOPS.length} stops · about 15 min · indoor route</span>
+          </span>
+          <Glyph>{ICONS.next}</Glyph>
+        </button>
+      ) : null}
       <p className="px-5 pt-3 pb-1 text-[13px] font-semibold text-[#5f6368]">
         {!searchTerm && !activeCategory ? "Popular places" : `Results${buildingId ? ` in ${buildingName(buildingId)}` : ""}`}
       </p>
@@ -786,10 +860,66 @@ export function CampusApp() {
     </section>
   );
 
+  const tourStop = TOUR_STOPS[tourIndex];
+  const tourRoom = routingGraph ? tourGraph(routingGraph).rooms[tourStop.roomId] : null;
+  const nextTourIndex = TOUR_STOPS.findIndex((stop, i) => i > tourIndex && !stop.optional);
+  const prevTourIndex = TOUR_STOPS.findLastIndex((stop, i) => i < tourIndex && !stop.optional);
+  // A detour counts as progress up to the main stop it branches from.
+  const tourProgress = MAIN_TOUR_STOPS.indexOf(tourStop.optional ? TOUR_STOPS[prevTourIndex] : tourStop) + 1;
+  const detour = TOUR_STOPS[tourIndex + 1]?.optional ? TOUR_STOPS[tourIndex + 1] : null;
+  const detourRoom = detour && routingGraph ? routingGraph.rooms[detour.roomId] : null;
+  const routeFrom = activeRoute ? TOUR_STOPS.find((stop) => stop.roomId === activeRoute.fromRoom) : null;
+  const tourPanel = (
+    <>
+      <div className="flex items-center gap-1 border-b border-[#e8eaed] py-1 pr-2 pl-5">
+        <h2 className="flex-1 text-lg font-semibold">First-week tour</h2>
+        <span className="text-[13px] font-medium text-[#5f6368]">{tourStop.optional ? "Detour" : `Stop ${tourProgress} of ${MAIN_TOUR_STOPS.length}`}</span>
+        <button type="button" onClick={closeTour} aria-label="End tour" className={iconButton}><Glyph>{ICONS.close}</Glyph></button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+        <div aria-hidden="true" className="mb-3 flex gap-1">
+          {MAIN_TOUR_STOPS.map((stop, i) => <span key={stop.roomId} className={`h-1 flex-1 rounded-full ${i < tourProgress ? "bg-[#5b238a]" : "bg-[#e8eaed]"}`} />)}
+        </div>
+        {tourStop.photo ? (
+          <figure className="mb-3">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={tourStop.photo.src} alt={tourStop.photo.alt} className="h-32 w-full rounded-xl bg-[#e8eaed] object-cover md:h-48" />
+            <figcaption className="mt-1 text-[11px] text-[#5f6368]">Photo: <a href={tourStop.photo.href} target="_blank" rel="noreferrer" className="underline">{tourStop.photo.credit}</a>, {tourStop.photo.license}, via Wikimedia Commons</figcaption>
+          </figure>
+        ) : null}
+        {tourRoom ? <p className="text-xs font-bold tracking-wider text-[#5b238a] uppercase">{buildingName(tourRoom.building)} · {levelName(tourRoom.level)}</p> : null}
+        <h3 className="mt-1 text-[22px] leading-7 font-bold">{tourStop.title}</h3>
+        {activeRoute && routeFrom ? (
+          <p className="mt-1 text-[13px] font-medium text-[#137333]">{routeMinutes} min walk from {routeFrom.title}{activeRoute.transitions.some((t) => t.type === "bridge") ? " · via skybridge" : ""}{activeRoute.transitions.some((t) => t.type === "stairs") ? " · includes stairs" : ""}</p>
+        ) : null}
+        <p className="mt-3 text-[15px] leading-6 text-[#3c4043]">{tourStop.body}</p>
+        {detour ? (
+          <button type="button" onClick={() => goToTourStop(tourIndex + 1)} className="mt-4 flex w-full items-center gap-3 rounded-xl border border-[#dadce0] px-4 py-3 text-left hover:bg-[#5b238a]/5">
+            <span className="text-[#5b238a]"><Glyph>{ICONS.pin}</Glyph></span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[15px] font-semibold">Detour: {detour.title}</span>
+              {detourRoom ? <span className="block text-[13px] text-[#5f6368]">{levelName(detourRoom.level)} · optional</span> : null}
+            </span>
+            <Glyph>{ICONS.next}</Glyph>
+          </button>
+        ) : null}
+        {tourStop.source ? <a href={tourStop.source.href} target="_blank" rel="noreferrer" className="mt-4 inline-block text-[13px] font-medium text-[#5b238a] underline">{tourStop.source.label}</a> : null}
+      </div>
+      <div className="flex shrink-0 gap-2 border-t border-[#e8eaed] px-4 py-3">
+        <button type="button" onClick={() => goToTourStop(prevTourIndex)} disabled={prevTourIndex < 0} className="h-11 flex-1 rounded-full bg-[#f1eaf7] text-[15px] font-semibold text-[#5b238a] disabled:opacity-40">Back</button>
+        {nextTourIndex >= 0 ? (
+          <button type="button" onClick={() => goToTourStop(nextTourIndex)} className="h-11 min-w-0 flex-[2] truncate rounded-full bg-[#5b238a] px-4 text-[15px] font-semibold text-white hover:bg-[#4b1d72]">Next: {TOUR_STOPS[nextTourIndex].title}</button>
+        ) : (
+          <button type="button" onClick={closeTour} className="h-11 flex-[2] rounded-full bg-[#5b238a] text-[15px] font-semibold text-white hover:bg-[#4b1d72]">Finish tour</button>
+        )}
+      </div>
+    </>
+  );
+
   const signedInInitial = user?.name.trim().charAt(0).toUpperCase() || "?";
 
   return (
-    <div className="relative h-dvh min-h-0 overflow-hidden bg-[#f2f2f0] text-[#1f1f1f]">
+    <div className="relative h-dvh min-h-0 overflow-hidden bg-[#f2f2f0] text-[#1f1f1f]" style={{ "--sheet-h": sheetHeight == null ? "46dvh" : `${sheetHeight}px` } as CSSProperties}>
       <main className="absolute inset-0">
         <MapView
           buildingId={buildingId}
@@ -800,16 +930,11 @@ export function CampusApp() {
           activeRoute={activeRoute}
           activeLegIndex={activeLegIndex}
           directionMode={directionMode}
+          zoomToSelected={panel === "tour"}
           pickedBuilding={pickedBuilding}
           onPickBuilding={pickBuilding}
         />
       </main>
-
-      {/* Fixed corner: bottom-left on desktop, top-left on phones (where guidance needs the full top width). */}
-      <div className={`pointer-events-none absolute top-3 left-3 z-10 items-center rounded-xl px-3 py-2 md:top-auto md:bottom-4 md:left-4 md:flex ${card} ${navigating ? "hidden" : "flex"}`}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/hunter-logo.svg" alt="Hunter College" className="h-7 w-auto md:h-9" />
-      </div>
 
       {!navigating ? (
         <div className="absolute top-4 left-[408px] z-20 hidden gap-2 md:flex">{categoryChips(true)}</div>
@@ -836,11 +961,45 @@ export function CampusApp() {
 
       {!navigating || showSteps ? (
         <aside
+          ref={sheetRef}
           id="map-controls"
           aria-label="Search and places"
-          className={`absolute inset-x-0 bottom-0 z-20 flex flex-col overflow-hidden rounded-t-[20px] border border-white/60 bg-white/75 shadow-[0_-2px_16px_rgba(0,0,0,.18)] backdrop-blur-md backdrop-saturate-150 ${sheetExpanded ? "max-h-[85dvh]" : "max-h-[46dvh]"} md:inset-x-auto md:top-4 md:bottom-auto md:left-4 md:max-h-[calc(100dvh-112px)] md:w-[380px] md:shadow-[0_1px_3px_rgba(60,64,67,.25),0_4px_12px_rgba(60,64,67,.12)] ${panelVisible ? "md:rounded-2xl" : "md:rounded-[24px]"}`}
+          className={`absolute inset-x-0 bottom-0 z-20 flex flex-col overflow-hidden rounded-t-[20px] border border-white/60 bg-white/60 shadow-[0_-2px_16px_rgba(0,0,0,.18)] backdrop-blur-md backdrop-saturate-150 h-(--sheet-h) ${sheetDragging ? "" : "transition-[height]"} md:inset-x-auto md:h-auto md:top-4 md:bottom-auto md:left-4 md:max-h-[calc(100dvh-112px)] md:w-[380px] md:shadow-[0_1px_3px_rgba(60,64,67,.25),0_4px_12px_rgba(60,64,67,.12)] ${panelVisible ? "md:rounded-2xl" : "md:rounded-[24px]"}`}
         >
-          <button type="button" onClick={() => setSheetExpanded(!sheetExpanded)} aria-label={sheetExpanded ? "Collapse panel" : "Expand panel"} aria-expanded={sheetExpanded} className="flex h-6 shrink-0 items-center justify-center md:hidden">
+          {/* Tap toggles between minimized and half; swipe up/down steps through min, half, full. */}
+          <button
+            type="button"
+            onPointerDown={(event) => {
+              event.currentTarget.setPointerCapture(event.pointerId);
+              sheetDrag.current = { y: event.clientY, height: sheetRef.current?.getBoundingClientRect().height ?? SHEET_MIN, moved: false };
+            }}
+            onPointerMove={(event) => {
+              const drag = sheetDrag.current;
+              if (!drag) return;
+              const dy = drag.y - event.clientY;
+              if (!drag.moved && Math.abs(dy) < 6) return;
+              drag.moved = true;
+              setSheetDragging(true);
+              setSheetHeight(clampSheet(drag.height + dy));
+            }}
+            onPointerUp={(event) => {
+              const drag = sheetDrag.current;
+              sheetDrag.current = null;
+              setSheetDragging(false);
+              if (!drag?.moved) return;
+              sheetJustDragged.current = true;
+              const height = clampSheet(drag.height + drag.y - event.clientY);
+              saveSheetHeight(height < SHEET_MIN + 24 ? SHEET_MIN : height);
+            }}
+            onPointerCancel={() => { sheetDrag.current = null; setSheetDragging(false); }}
+            onClick={() => {
+              if (sheetJustDragged.current) { sheetJustDragged.current = false; return; }
+              if (sheetMinimized) restoreSheet(); else saveSheetHeight(SHEET_MIN);
+            }}
+            aria-label={sheetMinimized ? "Show panel. Drag to resize" : "Minimize panel. Drag to resize"}
+            aria-expanded={!sheetMinimized}
+            className="flex h-6 shrink-0 cursor-row-resize touch-none items-center justify-center md:hidden"
+          >
             <span className="h-[5px] w-9 rounded-full bg-[#c4c7c5]" />
           </button>
 
@@ -854,6 +1013,8 @@ export function CampusApp() {
             </>
           ) : panel === "directions" ? (
             <div className="min-h-0 flex-1 overflow-y-auto">{directionsPanel}</div>
+          ) : panel === "tour" ? (
+            tourPanel
           ) : panel === "contribute" ? (
             <>
               <div className="flex items-center gap-1 border-b border-[#e8eaed] py-1 pr-2 pl-1">
@@ -878,7 +1039,7 @@ export function CampusApp() {
                   id="room-search"
                   value={query}
                   onChange={(event) => { setQuery(event.target.value); setSelectedRoom(null); setPanel("results"); }}
-                  onFocus={() => { setMenuOpen(false); if (!panel) setPanel("results"); setSheetExpanded(true); }}
+                  onFocus={() => { setMenuOpen(false); if (!panel) setPanel("results"); restoreSheet(); }}
                   onKeyDown={(event) => event.key === "Enter" && goToQuery()}
                   className="h-full min-w-0 flex-1 bg-transparent px-1 text-[15px] text-[#1f1f1f] outline-none placeholder:text-[#5f6368]"
                   placeholder="Search rooms, buildings, places"
@@ -897,6 +1058,7 @@ export function CampusApp() {
                 {menuOpen ? (
                   <ul aria-label="Menu" className="border-t border-[#e8eaed] py-1">
                     <li><button type="button" onClick={openDirections} className="flex min-h-12 w-full items-center gap-4 px-5 text-left text-[15px] hover:bg-[#5b238a]/10"><span className="text-[#5b238a]"><Glyph>{ICONS.directions}</Glyph></span>Directions</button></li>
+                    <li><button type="button" onClick={() => goToTourStop(0)} disabled={!routingGraph} className="flex min-h-12 w-full items-center gap-4 px-5 text-left text-[15px] hover:bg-[#5b238a]/10 disabled:opacity-50"><span className="text-[#5b238a]"><Glyph>{ICONS.flag}</Glyph></span>First-week campus tour</button></li>
                     <li><button type="button" onClick={openContribute} className="flex min-h-12 w-full items-center gap-4 px-5 text-left text-[15px] hover:bg-[#5b238a]/10"><span className="text-[#5b238a]"><Glyph>{ICONS.upload}</Glyph></span>Contribute a 360° photo</button></li>
                   </ul>
                 ) : null}
@@ -934,7 +1096,7 @@ export function CampusApp() {
       ) : null}
 
       {navigating ? (
-        <section aria-label="Trip summary" className={`absolute inset-x-0 bottom-0 z-30 flex-col gap-3.5 rounded-t-[20px] border border-white/60 bg-white/75 px-4 pt-4 pb-7 shadow-[0_-2px_16px_rgba(0,0,0,.18)] backdrop-blur-md backdrop-saturate-150 md:inset-x-auto md:bottom-6 md:w-[640px] md:flex-row md:items-center md:gap-5 md:rounded-[20px] md:py-3.5 md:pr-4 md:pl-6 md:shadow-[0_1px_3px_rgba(60,64,67,.25),0_4px_12px_rgba(60,64,67,.12)] ${showSteps ? "hidden md:left-[408px] md:flex" : "flex md:left-1/2 md:-translate-x-1/2"}`}>
+        <section aria-label="Trip summary" className={`absolute inset-x-0 bottom-0 z-30 flex-col gap-3.5 rounded-t-[20px] border border-white/60 bg-white/60 px-4 pt-4 pb-7 shadow-[0_-2px_16px_rgba(0,0,0,.18)] backdrop-blur-md backdrop-saturate-150 md:inset-x-auto md:bottom-6 md:w-[640px] md:flex-row md:items-center md:gap-5 md:rounded-[20px] md:py-3.5 md:pr-4 md:pl-6 md:shadow-[0_1px_3px_rgba(60,64,67,.25),0_4px_12px_rgba(60,64,67,.12)] ${showSteps ? "hidden md:left-[408px] md:flex" : "flex md:left-1/2 md:-translate-x-1/2"}`}>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-3">
               <p className="min-w-0 flex-1 text-[22px] font-bold text-[#137333]">{routeMinutes} min <span className="text-[15px] font-medium text-[#5f6368]">· {Math.round(activeRoute?.totalDistanceMeters ?? 0)} m · Step {legNumber} of {legs.length}</span></p>

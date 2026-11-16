@@ -79,6 +79,12 @@ button:focus-visible, a:focus-visible, select:focus-visible {
   outline-offset: 3px;
 }
 
+/* Map zoom buttons match the app's frosted-glass controls. */
+.maplibregl-ctrl-group:not(:empty) {
+  background: rgb(255 255 255 / 60%);
+  backdrop-filter: blur(12px) saturate(1.5);
+}
+
 .photo-dialog::backdrop {
   background: rgb(25 20 32 / 65%);
 }

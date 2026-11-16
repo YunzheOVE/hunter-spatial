@@ -12,6 +12,8 @@ const BUILDING_OPTIONS: { id: CampusBuildingId | null; short: string; name: stri
   { id: "BTB", short: "BAKER", name: "Baker Theatre" },
 ];
 
+const buildingIcon = <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 21h18M5 21V8l5-3v16M10 21V3l9 4v14M14 9h2M14 13h2M14 17h2" /></svg>;
+
 export function LevelControl({ levels, floor, onSelect, buildingId = null, onSelectBuilding, onOutdoor, routeLevels = [], className = "" }: {
   levels: readonly number[];
   floor: number | null;
@@ -24,21 +26,27 @@ export function LevelControl({ levels, floor, onSelect, buildingId = null, onSel
 }) {
   const [expanded, setExpanded] = useState(false);
   const [buildingMenu, setBuildingMenu] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const index = levels.indexOf(floor ?? 1);
   const start = Math.max(0, Math.min(index - 1, levels.length - 4));
   const visibleLevels = (expanded ? [...levels] : levels.slice(start, start + 4)).reverse();
-  const buttonStyle = "relative flex h-11 min-w-11 items-center justify-center rounded-[10px] text-[15px] font-semibold transition";
+  const buttonStyle = "relative flex h-9 min-w-9 items-center md:h-11 md:min-w-11 justify-center rounded-[10px] text-[15px] font-semibold transition";
   const building = BUILDING_OPTIONS.find((option) => option.id === buildingId) ?? BUILDING_OPTIONS[0];
 
   return (
-    <nav aria-label="Campus levels" className={`absolute right-3 z-30 rounded-[14px] border border-white/60 bg-white/75 p-1.5 shadow-[0_1px_3px_rgba(60,64,67,.25),0_4px_12px_rgba(60,64,67,.12)] backdrop-blur-md backdrop-saturate-150 md:right-4 ${className}`}>
+    <nav aria-label="Campus levels" className={`absolute right-3 z-30 rounded-[14px] border border-white/60 bg-white/60 p-1 shadow-[0_1px_3px_rgba(60,64,67,.25),0_4px_12px_rgba(60,64,67,.12)] backdrop-blur-md backdrop-saturate-150 md:right-4 md:p-1.5 ${className}`}>
+      {/* Phones: collapsed to the current level so the column doesn't cover the map; desktop always shows everything. */}
+      <button type="button" aria-expanded={mobileOpen} aria-controls="campus-level-panel" aria-label={mobileOpen ? "Hide level picker" : `Show level picker. Current: ${floor == null ? "outdoor campus" : floor === 0 ? "Concourse" : `Level ${floor}`}`} onClick={() => setMobileOpen(!mobileOpen)} className={`${buttonStyle} w-full md:hidden ${mobileOpen ? "text-[#5f6368] hover:bg-black/5" : "bg-[#5b238a] text-white"}`}>
+        {mobileOpen ? <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg> : floor == null ? buildingIcon : floor === 0 ? "C" : floor}
+      </button>
+      <div id="campus-level-panel" className={mobileOpen ? "" : "hidden md:block"}>
       {onSelectBuilding ? (
         <div className="relative">
           <button type="button" aria-haspopup="true" aria-expanded={buildingMenu} aria-label={`Choose building: ${building.name}`} onClick={() => setBuildingMenu(!buildingMenu)} className="flex h-8 w-full items-center justify-center rounded-lg text-[10px] font-bold tracking-wider text-[#5b238a] hover:bg-black/5">
             {building.short}
           </button>
           {buildingMenu ? (
-            <ul className="absolute top-0 right-full mr-2 w-48 rounded-xl border border-white/60 bg-white/85 py-1 shadow-[0_1px_3px_rgba(60,64,67,.25),0_4px_12px_rgba(60,64,67,.12)] backdrop-blur-md">
+            <ul className="absolute top-0 right-full mr-2 w-48 rounded-xl border border-white/60 bg-white/70 py-1 shadow-[0_1px_3px_rgba(60,64,67,.25),0_4px_12px_rgba(60,64,67,.12)] backdrop-blur-md">
               {BUILDING_OPTIONS.map((option) => (
                 <li key={option.short}>
                   <button type="button" aria-pressed={option.id === buildingId} onClick={() => { onSelectBuilding(option.id); setBuildingMenu(false); }} className={`flex min-h-11 w-full items-center px-4 text-left text-sm hover:bg-[#5b238a]/10 ${option.id === buildingId ? "font-semibold text-[#5b238a]" : "text-[#1f1f1f]"}`}>
@@ -71,11 +79,12 @@ export function LevelControl({ levels, floor, onSelect, buildingId = null, onSel
       {onOutdoor ? (
         <>
           <span className="mx-auto my-1 block h-px w-8 bg-[#e8eaed]" />
-          <button type="button" aria-label="Outdoor campus" aria-pressed={floor == null} title="Outdoor view" onClick={onOutdoor} className={`${buttonStyle} w-full ${floor == null ? "bg-[#5b238a] text-white" : "text-[#3c4043] hover:bg-black/5"}`}>
-            <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 21h18M5 21V8l5-3v16M10 21V3l9 4v14M14 9h2M14 13h2M14 17h2" /></svg>
+          <button type="button" aria-label="Outdoor campus" aria-pressed={floor == null} title={floor == null ? "Back to indoor floors" : "Outdoor view"} onClick={() => floor == null ? onSelect(levels.includes(1) ? 1 : levels[0]) : onOutdoor()} className={`${buttonStyle} w-full ${floor == null ? "bg-[#5b238a] text-white" : "text-[#3c4043] hover:bg-black/5"}`}>
+            {buildingIcon}
           </button>
         </>
       ) : null}
+      </div>
     </nav>
   );
 }

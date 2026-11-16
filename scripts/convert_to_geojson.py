@@ -163,8 +163,18 @@ def canonical_room_id(name: str, external_id: str = "") -> str:
     return name.strip()
 
 
+# Corrections to labels in the Mappedin source, checked against hunter.cuny.edu office pages.
+NAME_FIXES = {
+    "W203": "W203 OneCard Office",
+    "Admissions": "N203",  # Undergraduate Admissions is North 100, not N203.
+    "N217 One Stop / Registar": "N217 One Stop / Registrar",
+    "Welcome Desk": "Cooperman Library Welcome Desk",
+}
+
+
 def _feature_name(feature: dict) -> str:
-    return ((feature.get("properties") or {}).get("details") or {}).get("name", "").strip()
+    name = ((feature.get("properties") or {}).get("details") or {}).get("name", "").strip()
+    return NAME_FIXES.get(name, name)
 
 
 def _feature_id(feature: dict) -> str:

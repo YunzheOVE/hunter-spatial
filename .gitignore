@@ -17,3 +17,6 @@ scratch/
 project/
 local-data/
 .claude/
+temp-blender/
+*.tsbuildinfo
+

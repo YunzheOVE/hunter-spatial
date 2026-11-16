@@ -82,7 +82,7 @@ def categorize_room(name: str, room_id: str) -> dict:
     if "escalator" in n_lower:
         return {
             "category": "escalator",
-            "iconBadge": "badge-stairs",
+            "iconBadge": "badge-escalator",
             "displayCode": "",
         }
     if "library" in n_lower:
@@ -229,7 +229,7 @@ def build_markers() -> dict:
             raw_name = (c.get("details") or {}).get("name") or c.get("name") or c_type
             clean_name = raw_name.replace("Building", "").strip()
 
-            icon_badge = "badge-stairs" if c_type in {"stairs", "escalator"} else "badge-elevator"
+            icon_badge = {"stairs": "badge-stairs", "escalator": "badge-escalator"}.get(c_type, "badge-elevator")
 
             for n_id in c.get("nodes", []):
                 if n_id not in nodes:

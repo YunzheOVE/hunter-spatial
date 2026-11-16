@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { Season, TimeOfDay, Weather } from "@/lib/mapScene";
 import { Glyph } from "./WayfindingIcon";
 
@@ -27,7 +27,7 @@ function Group<T extends string>({ label, options, value, onChange }: { label: s
   return (
     <div role="group" aria-label={label} className="flex gap-0.5">
       {options.map((option) => (
-        <button key={option.id} type="button" title={option.label} aria-label={option.label} aria-pressed={value === option.id} onClick={() => onChange(option.id)} className={`flex h-9 w-9 items-center justify-center rounded-full transition ${value === option.id ? "bg-[#5b238a] text-white" : "text-[#3c4043] hover:bg-black/5"}`}>
+        <button key={option.id} type="button" title={option.label} aria-label={option.label} aria-pressed={value === option.id} onClick={() => onChange(option.id)} className={`flex h-8 w-8 items-center md:h-9 md:w-9 justify-center rounded-full transition ${value === option.id ? "bg-[#5b238a] text-white" : "text-[#3c4043] hover:bg-black/5"}`}>
           <Glyph size={18}>{option.icon}</Glyph>
         </button>
       ))}
@@ -35,20 +35,39 @@ function Group<T extends string>({ label, options, value, onChange }: { label: s
   );
 }
 
-/** Time of day and weather for the outdoor view. */
-export function SceneControl({ time, weather, season, onTime, onWeather, onSeason, className = "" }: { time: TimeOfDay; weather: Weather; season: Season; onTime: (time: TimeOfDay) => void; onWeather: (weather: Weather) => void; onSeason: (season: Season) => void; className?: string }) {
+/** Time of day and weather for the outdoor view; indoors only day and night apply, so it is a single toggle. */
+export function SceneControl({ time, weather, season, onTime, onWeather, onSeason, dayNightOnly = false, className = "" }: { time: TimeOfDay; weather: Weather; season: Season; onTime: (time: TimeOfDay) => void; onWeather: (weather: Weather) => void; onSeason: (season: Season) => void; dayNightOnly?: boolean; className?: string }) {
   const current = SEASONS.find((option) => option.id === season) ?? SEASONS[0];
   const next = SEASONS[(SEASONS.indexOf(current) + 1) % SEASONS.length];
+  const [open, setOpen] = useState(false);
+  const timeIcon = (TIMES.find((option) => option.id === time) ?? TIMES[0]).icon;
+  const pill = "flex items-center gap-1 rounded-full border border-white/60 bg-white/60 p-1 shadow-[0_1px_3px_rgba(60,64,67,.25),0_4px_12px_rgba(60,64,67,.12)] backdrop-blur-md backdrop-saturate-150";
+  if (dayNightOnly) {
+    const night = time === "night";
+    return (
+      <div className={`${pill} ${className}`}>
+        <button type="button" aria-pressed={night} aria-label={night ? "Night mode on. Switch to day" : "Switch to night mode"} title={night ? "Switch to day" : "Switch to night"} onClick={() => onTime(night ? "day" : "night")} className="flex h-8 w-8 items-center justify-center rounded-full bg-[#5b238a] text-white md:h-9 md:w-9">
+          <Glyph size={18}>{TIMES[night ? 2 : 0].icon}</Glyph>
+        </button>
+      </div>
+    );
+  }
   return (
-    <div className={`flex items-center gap-1 rounded-full border border-white/60 bg-white/75 p-1 shadow-[0_1px_3px_rgba(60,64,67,.25),0_4px_12px_rgba(60,64,67,.12)] backdrop-blur-md backdrop-saturate-150 ${className}`}>
-      <Group label="Time of day" options={TIMES} value={time} onChange={onTime} />
-      <span aria-hidden="true" className="h-6 w-px bg-black/10" />
-      <Group label="Weather" options={WEATHERS} value={weather} onChange={onWeather} />
-      <span aria-hidden="true" className="h-6 w-px bg-black/10" />
-      {/* One button that cycles through the seasons keeps the pill narrow on phones. */}
-      <button type="button" title={`Season: ${current.label}`} aria-label={`Season: ${current.label}. Switch to ${next.label}`} onClick={() => onSeason(next.id)} className="flex h-9 w-9 items-center justify-center rounded-full text-[#3c4043] hover:bg-black/5">
-        <Glyph size={18}>{current.icon}</Glyph>
+    <div className={`${pill} ${className}`}>
+      {/* Collapsed to one button by default so the pill doesn't cover the map. */}
+      <button type="button" aria-expanded={open} aria-controls="scene-options" aria-label={open ? "Hide scene options" : "Show time, weather and season options"} onClick={() => setOpen(!open)} className="flex h-8 w-8 items-center justify-center rounded-full bg-[#5b238a] text-white md:h-9 md:w-9">
+        <Glyph size={18}>{open ? <path d="M18 6 6 18M6 6l12 12" /> : timeIcon}</Glyph>
       </button>
+      <div id="scene-options" className={`items-center gap-1 ${open ? "flex" : "hidden"}`}>
+        <Group label="Time of day" options={TIMES} value={time} onChange={onTime} />
+        <span aria-hidden="true" className="h-6 w-px bg-black/10" />
+        <Group label="Weather" options={WEATHERS} value={weather} onChange={onWeather} />
+        <span aria-hidden="true" className="h-6 w-px bg-black/10" />
+        {/* One button that cycles through the seasons keeps the pill narrow on phones. */}
+        <button type="button" title={`Season: ${current.label}`} aria-label={`Season: ${current.label}. Switch to ${next.label}`} onClick={() => onSeason(next.id)} className="flex h-8 w-8 items-center justify-center rounded-full text-[#3c4043] hover:bg-black/5 md:h-9 md:w-9">
+          <Glyph size={18}>{current.icon}</Glyph>
+        </button>
+      </div>
     </div>
   );
 }
