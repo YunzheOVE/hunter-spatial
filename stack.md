@@ -56,6 +56,20 @@ This document provides a comprehensive, structured reference of all technologies
 
 ## 3. Routing & Algorithms
 
+### Route request flow
+
+```mermaid
+flowchart TD
+    input["Choose a start, destination, and route type"] --> resolve["Match the inputs to locations on the campus map"]
+    resolve --> stepFree{"Step-free selected?"}
+    stepFree -->|Yes| filter["Keep step-free connections"]
+    stepFree -->|No| search["Search for a route with A* in the browser"]
+    filter --> search
+    search --> found{"Route found?"}
+    found -->|Yes| show["Draw the route and show floor-by-floor steps"]
+    found -->|No| message["Show a message that no route is available"]
+```
+
 ### ngraph.graph
 * **What it is:** A high-performance, lightweight graph data structure library for JavaScript.
 * **What it does in the project:** Constructs and holds the in-memory directed graph of Hunter's physical corridor network (7,161 walkable nodes and 112 multi-floor connectors).

@@ -5,68 +5,49 @@
 <h1 align="center">Hunter Spatial</h1>
 
 <p align="center">
-  <strong>A 3D indoor campus map and wayfinding engine for CUNY Hunter College.</strong><br />
-  Search a room, switch floors, and follow a route through the buildings, not just the streets.
+  <strong>A 3D campus map and indoor directions for CUNY Hunter College.</strong><br />
+  Search for rooms, switch floors, and find your way around the 68th Street campus.
 </p>
 
 <p align="center">
-  <a href="https://hunter-spatial-web.vercel.app">Live site</a> ·
-  <a href="stack.md">Tech stack</a> ·
-  <a href="plan.md">Project plan</a>
+  <a href="https://hunter-spatial-web.vercel.app"><strong>Open the map</strong></a> ·
+  <a href=".github/readme/campus-demo.mp4?raw=true">Demo video (MP4)</a>
 </p>
 
 <p align="center">
-  <img alt="Next.js" src="https://img.shields.io/badge/app-Next.js%2015%20%2B%20React%2019-111111?style=flat-square" />
-  <img alt="MapLibre" src="https://img.shields.io/badge/map-MapLibre%20GL-396cb2?style=flat-square" />
-  <img alt="A*" src="https://img.shields.io/badge/routing-A*%20(ngraph)-5f259f?style=flat-square" />
-  <img alt="Pannellum" src="https://img.shields.io/badge/360%C2%B0-Pannellum-e07a3f?style=flat-square" />
-  <img alt="SQLite" src="https://img.shields.io/badge/storage-SQLite-0f80cc?style=flat-square" />
-  <img alt="Python" src="https://img.shields.io/badge/data-Python%20%2B%20GeoJSON-3fb08c?style=flat-square" />
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset=".github/readme/campus-map.png" />
+    <img src=".github/readme/campus-demo.gif" alt="Hunter Spatial demo showing a room search and a step-free route from W117 through a skybridge to TH114." width="900" />
+  </picture>
 </p>
 
-<p align="center"><em>Capstone project at CUNY Hunter College (68th Street campus).</em></p>
+## Try it
 
-<p align="center">
-  <img src=".github/readme/campus-map.png" alt="The Hunter campus in 3D: the North, East and West buildings in purple among Upper East Side blocks, with search, category filters and a floor switcher" width="900" />
-</p>
+- **Find a room in 3D.** Search for `TH114` to jump to its floor in Thomas Hunter Hall.
+- **Get indoor directions.** Try `W117` to `TH114` and select **Step-free** to follow a route via elevators and skybridges.
+- **Explore the campus.** Open the scene controls at the bottom of the outdoor map to change the time of day, weather, and season.
+- **Take the first-week tour.** Find it in the map menu to visit spots like the OneCard Office and Cooperman Library.
 
-## Overview
+### Campus scenes
 
-- **Search any room** by code (`N304`, `HN 304`) and jump to it on the right floor.
-- **3D floor plans:** every building and floor is extruded in the browser, with a floor switcher and filters for classrooms, restrooms, and food.
-- **Indoor routing:** A* over Hunter's walkable graph, across floors, skybridges, and elevators, with an accessible-only mode.
-- **360° views** of key spots, submitted by students with a `@login.cuny.edu` account and published only after review.
-- **Time of day and weather** on the map, from day to night, rain, and snow.
+| Autumn at golden hour | A snowy winter night |
+| :---: | :---: |
+| ![Hunter's 3D campus in warm evening light beside Central Park's autumn colors](.github/readme/explore-autumn.jpg) | ![Hunter's 3D campus at night with falling snow and snow on the roofs](.github/readme/explore-snow.jpg) |
 
-## How it works
+## Quick start
 
-![System architecture](docs/system-architecture.png)
-
-1. A one-time Python pipeline extracts Hunter's public floor plans into GeoJSON and a routing graph ([data/SOURCE.md](data/SOURCE.md)). The live app never calls the original map service.
-2. MapLibre GL renders the floors as 3D extrusions from static files.
-3. `ngraph.path` finds the shortest route in the browser, from hallway node to the room's door.
-4. Panoramas load on demand from Next.js routes backed by SQLite and local image storage.
-
-## Run it
-
-Requires Node.js 22.13+ (and Python 3 to rebuild the map data).
+Requires Node.js 22.13 or newer.
 
 ```bash
 npm install
-npm run db:init && npm run db:seed   # optional: panorama database and example image
-npm run dev                          # http://localhost:3000, try searching N304
-npm test
+npm run dev
 ```
 
-To rebuild the map data from a local HAR capture (never committed):
+Open [localhost:3000](http://localhost:3000). Run tests with `npm test`.
+For optional setup, see [360° photos](database/README.md) and [rebuilding map data](data/SOURCE.md).
 
-```bash
-python scripts/extract_har.py
-python scripts/convert_to_geojson.py
-```
+## How it works
 
-See [database/README.md](database/README.md) for the panorama schema, endpoints, and the reviewer demo account.
+![System diagram showing how prepared floor plans power the 3D map and indoor routing in the browser, and how a separate server delivers approved 360° photos on request.](docs/system-architecture.svg)
 
----
-
-<sub>Indoor geometry is a one-time academic extract from Hunter College's public campus map and is not covered as open source. Not an official Hunter College product.</sub>
+[Tech stack](stack.md) · [Routing flowchart](stack.md#route-request-flow) · [Project plan](plan.md)
