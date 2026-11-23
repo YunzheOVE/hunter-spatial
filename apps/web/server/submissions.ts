@@ -5,6 +5,7 @@ import sharp from "sharp";
 import type { DatabaseSync } from "node:sqlite";
 import { getDataDirectory, isKnownLocation, openPanoramaDatabase } from "./panorama-store.mjs";
 import { requireUser } from "./auth";
+import { checkUploadQuota, uploadQuota, UploadLimitError } from "./upload-quota";
 import { checkSameOrigin, errorResponse, HttpError, readLimitedBody } from "./http";
 import { coverageError, MAX_PANORAMA_BYTES, MAX_PANORAMA_PIXELS, panoramaDimensionsError, type Submission } from "../src/lib/uploads";
 
@@ -18,6 +19,7 @@ export function ownSubmissions(database: DatabaseSync, userId: number): Submissi
 }
 
 export async function saveSubmission(database: DatabaseSync, form: FormData, userId: number, directory = getDataDirectory()) {
+  checkUploadQuota(database, userId);
   const locationId = form.get("locationId");
   if (typeof locationId !== "string" || !isKnownLocation(locationId)) throw new HttpError(400, "Select a location from the campus list.");
   const numbers = ["haov", "vaov", "vOffset"].map((key) => {
@@ -52,11 +54,16 @@ export async function saveSubmission(database: DatabaseSync, form: FormData, use
   await mkdir(path.join(directory, "uploads"), { recursive: true });
   await writeFile(absolutePath, bytes, { flag: "wx" });
   try {
+    database.exec("BEGIN IMMEDIATE");
+    checkUploadQuota(database, userId);
     const row = database.prepare(`INSERT INTO panoramas
       (location_id, file_path, uploaded_by, status, haov, vaov, v_offset)
       VALUES (?, ?, ?, 'pending', ?, ?, ?) RETURNING id`).get(locationId, relativePath, userId, haov, vaov, vOffset);
-    return ownSubmissions(database, userId).find((submission) => submission.id === Number(row!.id))!;
+    const submission = ownSubmissions(database, userId).find((submission) => submission.id === Number(row!.id))!;
+    database.exec("COMMIT");
+    return submission;
   } catch (error) {
+    if (database.isTransaction) database.exec("ROLLBACK");
     await unlink(absolutePath);
     throw error;
   }
@@ -67,8 +74,9 @@ export async function handleSubmissions(request: Request) {
   try {
     const user = requireUser(database, request);
     const headers = { "Cache-Control": "no-store" };
-    if (request.method === "GET") return Response.json({ submissions: ownSubmissions(database, user.id) }, { headers });
+    if (request.method === "GET") return Response.json({ submissions: ownSubmissions(database, user.id), quota: uploadQuota(database, user.id) }, { headers });
     checkSameOrigin(request);
+    checkUploadQuota(database, user.id);
     if (!request.headers.get("content-type")?.startsWith("multipart/form-data;")) throw new HttpError(400, "Submit an image with its location and viewing settings.");
     const bytes = await readLimitedBody(request, MAX_PANORAMA_BYTES + 64 * 1024);
     let form: FormData;
@@ -78,7 +86,14 @@ export async function handleSubmissions(request: Request) {
       }).formData();
     } catch { throw new HttpError(400, "Unable to read the upload. Please choose the file again."); }
     const submission = await saveSubmission(database, form, user.id);
-    return Response.json({ submission }, { status: 201, headers });
-  } catch (error) { return errorResponse(error); }
+    return Response.json({ submission, quota: uploadQuota(database, user.id) }, { status: 201, headers });
+  } catch (error) {
+    if (error instanceof UploadLimitError) {
+      return Response.json({ error: error.message, quota: error.quota }, {
+        status: 429, headers: { "Cache-Control": "no-store", "Retry-After": new Date(error.quota.resetsAt).toUTCString() },
+      });
+    }
+    return errorResponse(error);
+  }
   finally { database.close(); }
 }

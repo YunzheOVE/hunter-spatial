@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);
 
+CREATE INDEX IF NOT EXISTS panoramas_uploader_date ON panoramas(uploaded_by, uploaded_at);
+
 CREATE INDEX IF NOT EXISTS panoramas_approved_location
     ON panoramas(location_id, status, reviewed_at DESC, id DESC);
 

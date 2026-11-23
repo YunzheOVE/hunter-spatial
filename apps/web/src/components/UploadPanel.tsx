@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { CAMPUS_BUILDING_NAMES, type RoutingGraphData } from "@/lib/pathfinding";
 import type { PanoramaSource } from "@/lib/panorama";
-import { coverageError, panoramaFileError, panoramaDimensionsError, type SessionUser, type Submission } from "@/lib/uploads";
+import { coverageError, panoramaFileError, panoramaDimensionsError, type SessionUser, type Submission, type UploadQuota } from "@/lib/uploads";
 import { PanoramaPreviewModal } from "./PanoramaDialog";
 import { UserLogin } from "./UserLogin";
 import { ReviewerPanel } from "./ReviewerPanel";
@@ -13,13 +13,13 @@ const primaryClass = "rounded-xl bg-[#5b238a] px-4 py-2.5 text-sm font-semibold 
 const secondaryClass = "rounded-xl border border-[#5b238a]/30 bg-white/70 px-3 py-2 text-sm font-semibold text-[#5b238a] disabled:opacity-50";
 
 class ApiError extends Error {
-  constructor(message: string, public status: number) { super(message); }
+  constructor(message: string, public status: number, public quota?: UploadQuota) { super(message); }
 }
 
 async function api<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...options, cache: "no-store" });
   const body = await response.json().catch(() => ({ error: "Unable to complete the request. Please try again." }));
-  if (!response.ok) throw new ApiError(body.error ?? "Please try again.", response.status);
+  if (!response.ok) throw new ApiError(body.error ?? "Please try again.", response.status, body.quota);
   return body;
 }
 
@@ -40,6 +40,7 @@ export function UploadPanel({ graph, initialLocationId, locationsError }: { grap
   const [coverage, setCoverage] = useState({ haov: "360", vaov: "180", vOffset: "0" });
   const [preview, setPreview] = useState<{ locationId: string; panorama: PanoramaSource } | null>(null);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
+  const [quota, setQuota] = useState<UploadQuota | null>(null);
   const [listError, setListError] = useState("");
   const [loadingList, setLoadingList] = useState(false);
 
@@ -68,16 +69,32 @@ export function UploadPanel({ graph, initialLocationId, locationsError }: { grap
   }, [file]);
 
   useEffect(() => {
+    setQuota(null);
     if (!user) { setSubmissions([]); return; }
     const controller = new AbortController();
     setLoadingList(true);
     setListError("");
-    api<{ submissions: Submission[] }>("/api/submissions", { signal: controller.signal })
-      .then((body) => { if (!controller.signal.aborted) setSubmissions(body.submissions); })
+    api<{ submissions: Submission[]; quota: UploadQuota }>("/api/submissions", { signal: controller.signal })
+      .then((body) => {
+        if (!controller.signal.aborted) {
+          setSubmissions(body.submissions);
+          setQuota(body.quota);
+        }
+      })
       .catch((failure) => { if (!controller.signal.aborted) setListError(failure.message); })
       .finally(() => { if (!controller.signal.aborted) setLoadingList(false); });
     return () => controller.abort();
   }, [user]);
+
+  useEffect(() => {
+    if (!user || !quota) return;
+    const delay = new Date(quota.resetsAt).getTime() - Date.now();
+    if (delay <= 0) return;
+    const timer = window.setTimeout(() => void refreshSubmissions(), delay + 100);
+    return () => window.clearTimeout(timer);
+    // Refresh the allowance once at the server-provided daily reset time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, quota]);
 
   const options = useMemo(() => Object.entries(graph?.rooms ?? {}).map(([id, room]) => ({
     id, label: `${id}${room.name !== id ? ` — ${room.name}` : ""} · ${CAMPUS_BUILDING_NAMES[room.building] ?? room.building} · ${room.level === 0 ? "Concourse" : `Floor ${room.level}`}`,
@@ -91,6 +108,7 @@ export function UploadPanel({ graph, initialLocationId, locationsError }: { grap
   function clearFile() { setFile(null); setDimensions(null); setImageReadError(""); setPreview(null); if (fileInput.current) fileInput.current.value = ""; }
   function showError(failure: unknown) {
     setError(failure instanceof Error ? failure.message : "Please try again.");
+    if (failure instanceof ApiError && failure.quota) setQuota(failure.quota);
     if (failure instanceof ApiError && failure.status === 401) { setUser(null); clearFile(); }
   }
 
@@ -104,14 +122,16 @@ export function UploadPanel({ graph, initialLocationId, locationsError }: { grap
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(""); setNotice("");
+    if (!quota || quota.remaining === 0) { setError("Your daily upload allowance is unavailable or used up. Refresh My submissions to check it."); return; }
     if (!validLocation || !file || viewingError || checkingImage || imageError) { setError(imageError ?? viewingError ?? (checkingImage ? "Wait for the image check to finish." : "Choose an image and a location from the list.")); return; }
     const form = new FormData();
     form.set("locationId", locationId); form.set("image", file);
     for (const [key, value] of Object.entries(coverage)) form.set(key, value);
     setBusy(true);
     try {
-      const body = await api<{ submission: Submission }>("/api/submissions", { method: "POST", body: form });
+      const body = await api<{ submission: Submission; quota: UploadQuota }>("/api/submissions", { method: "POST", body: form });
       setSubmissions((current) => [body.submission, ...current]);
+      setQuota(body.quota);
       clearFile();
       setNotice("Submitted for review. Your panorama will appear on the map after approval.");
     } catch (failure) { showError(failure); }
@@ -120,7 +140,11 @@ export function UploadPanel({ graph, initialLocationId, locationsError }: { grap
 
   async function refreshSubmissions() {
     setLoadingList(true); setListError("");
-    try { setSubmissions((await api<{ submissions: Submission[] }>("/api/submissions")).submissions); }
+    try {
+      const body = await api<{ submissions: Submission[]; quota: UploadQuota }>("/api/submissions");
+      setSubmissions(body.submissions);
+      setQuota(body.quota);
+    }
     catch (failure) { setListError(failure instanceof Error ? failure.message : "Unable to load submissions."); if (failure instanceof ApiError && failure.status === 401) { setUser(null); clearFile(); } }
     finally { setLoadingList(false); }
   }
@@ -131,6 +155,7 @@ export function UploadPanel({ graph, initialLocationId, locationsError }: { grap
       <div className="flex items-center justify-between gap-2 rounded-xl bg-white/70 p-3"><p className="min-w-0 break-words text-xs">Signed in as <strong>{user.name}</strong></p><button type="button" className="shrink-0 text-xs font-semibold text-[#5b238a] underline" onClick={signOut} disabled={busy}>Sign out</button></div>
       {user.role === "reviewer" ? <ReviewerPanel graph={graph} onSessionExpired={() => { setUser(null); clearFile(); }} /> : null}
       <form onSubmit={submit} className="space-y-3">
+        <p role="status" className="text-xs leading-5 text-[#555861]">{quota ? `${quota.remaining} of ${quota.limit} uploads remaining today. Resets at midnight New York time.` : "Checking daily upload allowance. Use Refresh under My submissions if this does not load."}</p>
         <fieldset disabled={busy} className="min-w-0 space-y-3">
           <div><label className="block" htmlFor="upload-location-search">Find a room or location</label><input id="upload-location-search" type="search" value={search} onChange={(event) => { setSearch(event.target.value); setLocationId(""); }} className={inputClass} placeholder="Search room, name, or building" /></div>
           <div><label className="block" htmlFor="upload-location">Location <span aria-hidden="true">*</span></label><select id="upload-location" className={inputClass} value={locationId} onChange={(event) => setLocationId(event.target.value)} required disabled={!graph}>
@@ -165,7 +190,7 @@ export function UploadPanel({ graph, initialLocationId, locationsError }: { grap
             <label className="block text-xs">Vertical offset (degrees)<input type="number" className={inputClass} min="-90" max="90" step="any" required value={coverage.vOffset} onChange={(event) => setCoverage({ ...coverage, vOffset: event.target.value })} /></label>
             {viewingError ? <p className="text-xs text-[#b3261e]">{viewingError}</p> : null}
           </div> : null}
-          <div className="flex flex-wrap gap-2"><button type="button" className={secondaryClass} disabled={!localUrl || !validLocation || Boolean(viewingError) || checkingImage || Boolean(imageError)} onClick={() => setPreview({ locationId, panorama: { imageUrl: localUrl, haov: Number(coverage.haov), vaov: Number(coverage.vaov), vOffset: Number(coverage.vOffset) } })}>Preview panorama</button><button className={primaryClass} disabled={!validLocation || !file || Boolean(viewingError) || checkingImage || Boolean(imageError)}>{busy ? "Submitting…" : "Submit for review"}</button></div>
+          <div className="flex flex-wrap gap-2"><button type="button" className={secondaryClass} disabled={!localUrl || !validLocation || Boolean(viewingError) || checkingImage || Boolean(imageError)} onClick={() => setPreview({ locationId, panorama: { imageUrl: localUrl, haov: Number(coverage.haov), vaov: Number(coverage.vaov), vOffset: Number(coverage.vOffset) } })}>Preview panorama</button><button className={primaryClass} disabled={!quota || quota.remaining === 0 || !validLocation || !file || Boolean(viewingError) || checkingImage || Boolean(imageError)}>{busy ? "Submitting…" : "Submit for review"}</button></div>
         </fieldset>
       </form>
       {notice ? <p role="status" className="rounded-xl bg-emerald-50 p-3 text-xs leading-5 text-emerald-900">{notice}</p> : null}

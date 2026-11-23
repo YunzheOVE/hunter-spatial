@@ -12,6 +12,7 @@ import { checkSameOrigin, readLimitedBody } from "./http";
 import { isCampusEmail, REVIEWER_EMAIL } from "../src/lib/accountPolicy.mjs";
 import { ensureReviewer, REVIEWER_DEMO_PASSWORD } from "./reviewer-seed.mjs";
 import { handleReviews } from "./reviews";
+import { uploadQuota } from "./upload-quota";
 
 let directory: string;
 let database: ReturnType<typeof store.openPanoramaDatabase>;
@@ -53,6 +54,71 @@ function form(overrides: Record<string, string | File> = {}) {
   for (const [key, value] of Object.entries(overrides)) data.set(key, value);
   return data;
 }
+
+describe("daily upload quota", () => {
+  it("limits both roles, counts reviewed submissions, and returns allowance through the API", async () => {
+    for (const role of ["uploader", "reviewer"]) {
+      const { cookie, user } = await signUp(`quota-${role}@login.cuny.edu`);
+      database.prepare("UPDATE users SET role = ? WHERE id = ?").run(role, user.id);
+      const first = await saveSubmission(database, form(), user.id, directory);
+      database.prepare("UPDATE panoramas SET status = 'rejected' WHERE id = ?").run(first.id);
+      const second = await saveSubmission(database, form(), user.id, directory);
+      database.prepare("UPDATE panoramas SET status = 'approved' WHERE id = ?").run(second.id);
+      const list = await handleSubmissions(new Request(`${baseUrl}/api/submissions`, { headers: { Cookie: cookie } }));
+      expect((await list.json()).quota).toMatchObject({ limit: 2, remaining: 0 });
+      const blocked = await handleSubmissions(new Request(`${baseUrl}/api/submissions`, { method: "POST", headers: { Cookie: cookie }, body: form() }));
+      expect(blocked.status).toBe(429);
+      expect(blocked.headers.get("retry-after")).toBeTruthy();
+      expect((await blocked.json()).quota.remaining).toBe(0);
+    }
+  });
+
+  it("accepts only two concurrent uploads across connections and removes excess files", async () => {
+    const { user } = await signUp();
+    const connections = [openDatabase(databasePath), openDatabase(databasePath), openDatabase(databasePath)];
+    try {
+      const results = await Promise.allSettled(connections.map((connection) => saveSubmission(connection, form(), user.id, directory)));
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(2);
+      expect(results.find((result) => result.status === "rejected")).toMatchObject({ reason: { status: 429 } });
+      expect(readdirSync(path.join(directory, "uploads"))).toHaveLength(2);
+      expect(uploadQuota(database, user.id).remaining).toBe(0);
+    } finally { connections.forEach((connection) => connection.close()); }
+  });
+
+  it("does not consume allowance for invalid images or failed database inserts", async () => {
+    const { user, cookie } = await signUp();
+    await expect(saveSubmission(database, form({ image: new File(["broken"], "bad.png") }), user.id, directory)).rejects.toMatchObject({ status: 400 });
+    database.exec("CREATE TRIGGER fail_quota_insert BEFORE INSERT ON panoramas BEGIN SELECT RAISE(ABORT, 'test failure'); END");
+    await expect(saveSubmission(database, form(), user.id, directory)).rejects.toThrow("test failure");
+    expect(uploadQuota(database, user.id).remaining).toBe(2);
+    expect(database.isTransaction).toBe(false);
+    expect(readdirSync(path.join(directory, "uploads"))).toEqual([]);
+    database.exec("DROP TRIGGER fail_quota_insert");
+    const response = await handleSubmissions(new Request(`${baseUrl}/api/submissions`, { method: "POST", headers: { Cookie: cookie }, body: form() }));
+    expect(response.status).toBe(201);
+    expect((await response.json()).quota.remaining).toBe(1);
+  });
+
+  it.each([
+    ["2026-01-15T04:59:59Z", "2026-01-15T05:00:00.000Z"],
+    ["2026-01-15T05:00:00Z", "2026-01-16T05:00:00.000Z"],
+    ["2026-03-08T06:00:00Z", "2026-03-09T04:00:00.000Z"],
+    ["2026-11-01T06:00:00Z", "2026-11-02T05:00:00.000Z"],
+  ])("uses New York midnight including daylight saving at %s", async (now, reset) => {
+    const { user } = await signUp();
+    expect(uploadQuota(database, user.id, new Date(now)).resetsAt).toBe(reset);
+  });
+
+  it("restores the allowance at midnight and excludes records at the next day's boundary", async () => {
+    const { user } = await signUp();
+    const first = await saveSubmission(database, form(), user.id, directory);
+    const second = await saveSubmission(database, form(), user.id, directory);
+    database.prepare("UPDATE panoramas SET uploaded_at = ? WHERE id = ?").run("2026-01-15 04:59:59", first.id);
+    database.prepare("UPDATE panoramas SET uploaded_at = ? WHERE id = ?").run("2026-01-15 04:59:59", second.id);
+    expect(uploadQuota(database, user.id, new Date("2026-01-15T04:59:59Z")).remaining).toBe(0);
+    expect(uploadQuota(database, user.id, new Date("2026-01-15T05:00:00Z")).remaining).toBe(2);
+  });
+});
 
 describe("review decisions", () => {
   async function setup() {
